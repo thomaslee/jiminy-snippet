@@ -33,14 +33,31 @@ struct AnnotationCanvas: View {
                         .resizable()
                         .frame(width: imageSize.width, height: imageSize.height)
 
+                    // Interaction layer for creating new annotations (below existing ones)
+                    interactionLayer
+
+                    // Existing annotations on top so their gestures win
                     annotationsOverlay
 
+                    // Click-catching layer to commit text editing when clicking outside
+                    if editingTextId != nil {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .frame(width: imageSize.width, height: imageSize.height)
+                            .onTapGesture {
+                                if let editingId = editingTextId {
+                                    commitTextEditing(id: editingId)
+                                    focusedTextId = nil
+                                }
+                            }
+                    }
+
+                    // Arrow drawing preview (topmost so it's always visible)
                     if selectedTool == .arrow, let start = dragStart, let end = dragEnd {
                         ArrowShape(start: start, end: end)
                             .stroke(selectedColor, lineWidth: 4)
+                            .allowsHitTesting(false)
                     }
-
-                    interactionLayer
                 }
                 .frame(width: imageSize.width, height: imageSize.height)
                 .scaleEffect(scale)
@@ -54,17 +71,34 @@ struct AnnotationCanvas: View {
         }
     }
 
+    private func commitTextEditing(id: UUID) {
+        if let index = texts.firstIndex(where: { $0.id == id }) {
+            if texts[index].text.isEmpty {
+                texts.remove(at: index)
+            } else {
+                texts[index].isEditing = false
+            }
+        }
+        editingTextId = nil
+    }
+
+    // MARK: - Annotations Overlay
+
     @ViewBuilder
     private var annotationsOverlay: some View {
-        ForEach(arrows) { arrow in
-            ArrowShape(start: arrow.start, end: arrow.end)
-                .stroke(arrow.color, lineWidth: arrow.lineWidth)
+        ForEach(Array(arrows.enumerated()), id: \.element.id) { index, arrow in
+            DraggableArrowView(arrow: arrow) { newStart, newEnd in
+                arrows[index].start = newStart
+                arrows[index].end = newEnd
+            }
         }
 
         ForEach($texts) { $annotation in
             textAnnotationView(annotation: $annotation)
         }
     }
+
+    // MARK: - Text Annotation Views
 
     @ViewBuilder
     private func textAnnotationView(annotation: Binding<TextAnnotation>) -> some View {
@@ -89,20 +123,18 @@ struct AnnotationCanvas: View {
                     focusedTextId = nil
                 }
         } else {
-            Text(annotation.wrappedValue.text.isEmpty ? " " : annotation.wrappedValue.text)
-                .font(.system(size: annotation.wrappedValue.fontSize, weight: .bold))
-                .foregroundStyle(annotation.wrappedValue.color)
-                .fixedSize()
-                .position(annotation.wrappedValue.position)
-                .shadow(color: .black.opacity(0.5), radius: 1, x: 1, y: 1)
-                .onTapGesture {
-                    if selectedTool == .text {
-                        editingTextId = annotation.wrappedValue.id
-                        annotation.wrappedValue.isEditing = true
-                    }
+            DraggableTextView(
+                annotation: annotation,
+                selectedTool: selectedTool,
+                onStartEditing: {
+                    editingTextId = annotation.wrappedValue.id
+                    annotation.wrappedValue.isEditing = true
                 }
+            )
         }
     }
+
+    // MARK: - Interaction Layer (for creating new annotations)
 
     private var interactionLayer: some View {
         Color.clear
@@ -166,6 +198,95 @@ struct AnnotationCanvas: View {
         }
     }
 }
+
+// MARK: - Draggable Arrow View
+
+struct DraggableArrowView: View {
+    let arrow: ArrowAnnotation
+    let onMove: (CGPoint, CGPoint) -> Void
+
+    @State private var dragOffset: CGSize = .zero
+    @State private var isDragging = false
+
+    private var currentStart: CGPoint {
+        CGPoint(x: arrow.start.x + dragOffset.width, y: arrow.start.y + dragOffset.height)
+    }
+
+    private var currentEnd: CGPoint {
+        CGPoint(x: arrow.end.x + dragOffset.width, y: arrow.end.y + dragOffset.height)
+    }
+
+    var body: some View {
+        ZStack {
+            // Visible arrow
+            ArrowShape(start: currentStart, end: currentEnd)
+                .stroke(arrow.color, lineWidth: arrow.lineWidth)
+
+            // Wide invisible hit area for dragging
+            ArrowShape(start: currentStart, end: currentEnd)
+                .stroke(Color.white.opacity(0.001), lineWidth: 20)
+        }
+        .contentShape(
+            ArrowShape(start: currentStart, end: currentEnd)
+                .stroke(style: StrokeStyle(lineWidth: 20))
+        )
+        .gesture(
+            DragGesture(minimumDistance: 3)
+                .onChanged { value in
+                    isDragging = true
+                    dragOffset = value.translation
+                }
+                .onEnded { value in
+                    onMove(currentStart, currentEnd)
+                    dragOffset = .zero
+                    isDragging = false
+                }
+        )
+    }
+}
+
+// MARK: - Draggable Text View
+
+struct DraggableTextView: View {
+    @Binding var annotation: TextAnnotation
+    let selectedTool: AnnotationTool
+    let onStartEditing: () -> Void
+
+    @State private var dragOffset: CGSize = .zero
+
+    private var currentPosition: CGPoint {
+        CGPoint(
+            x: annotation.position.x + dragOffset.width,
+            y: annotation.position.y + dragOffset.height
+        )
+    }
+
+    var body: some View {
+        Text(annotation.text.isEmpty ? " " : annotation.text)
+            .font(.system(size: annotation.fontSize, weight: .bold))
+            .foregroundStyle(annotation.color)
+            .fixedSize()
+            .position(currentPosition)
+            .shadow(color: .black.opacity(0.5), radius: 1, x: 1, y: 1)
+            .gesture(
+                DragGesture(minimumDistance: 3)
+                    .onChanged { value in
+                        dragOffset = value.translation
+                    }
+                    .onEnded { value in
+                        annotation.position = currentPosition
+                        dragOffset = .zero
+                    }
+            )
+            .onTapGesture {
+                if selectedTool == .text {
+                    onStartEditing()
+                }
+            }
+    }
+}
+
+// MARK: - Arrow Shape
 
 struct ArrowShape: Shape {
     var start: CGPoint
