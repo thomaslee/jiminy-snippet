@@ -73,19 +73,6 @@ struct AnnotationCanvas: View {
         }
     }
 
-    private func deleteSelectedAnnotation() {
-        guard let id = selectedAnnotationId, editingTextId == nil else {
-            return
-        }
-        if let index = arrows.firstIndex(where: { $0.id == id }) {
-            arrows.remove(at: index)
-            selectedAnnotationId = nil
-        } else if let index = texts.firstIndex(where: { $0.id == id }) {
-            texts.remove(at: index)
-            selectedAnnotationId = nil
-        }
-    }
-
     private func commitTextEditing(id: UUID) {
         if let index = texts.firstIndex(where: { $0.id == id }) {
             if texts[index].text.isEmpty {
@@ -102,10 +89,8 @@ struct AnnotationCanvas: View {
         if let index = texts.firstIndex(where: { $0.id == id }) {
             if let original = editingOriginalText, !original.isEmpty {
                 texts[index].text = original
-                texts[index].isEditing = false
-            } else {
-                texts[index].isEditing = false
             }
+            texts[index].isEditing = false
         }
         editingTextId = nil
         editingOriginalText = nil
@@ -156,12 +141,7 @@ struct AnnotationCanvas: View {
                     focusedTextId = annotationId
                 }
                 .onSubmit {
-                    if annotation.wrappedValue.text.isEmpty {
-                        texts.removeAll { $0.id == annotation.wrappedValue.id }
-                    }
-                    annotation.wrappedValue.isEditing = false
-                    editingTextId = nil
-                    editingOriginalText = nil
+                    commitTextEditing(id: annotationId)
                     focusedTextId = nil
                 }
                 .onExitCommand {
@@ -226,14 +206,7 @@ struct AnnotationCanvas: View {
     private func handleTap(at location: CGPoint) {
         if selectedTool == .text {
             if let editingId = editingTextId {
-                if let index = texts.firstIndex(where: { $0.id == editingId }) {
-                    if texts[index].text.isEmpty {
-                        texts.remove(at: index)
-                    } else {
-                        texts[index].isEditing = false
-                    }
-                }
-                editingTextId = nil
+                commitTextEditing(id: editingId)
                 focusedTextId = nil
             }
 
@@ -382,27 +355,11 @@ struct ArrowShape: Shape {
         path.move(to: start)
         path.addLine(to: end)
 
-        let dx = end.x - start.x
-        let dy = end.y - start.y
-        let length = sqrt(dx * dx + dy * dy)
-        guard length > 0 else { return path }
-
-        let angle = atan2(dy, dx)
-        let headLength: CGFloat = min(20, length * 0.3)
-        let headAngle: CGFloat = .pi / 6
-
-        let p1 = CGPoint(
-            x: end.x - headLength * cos(angle - headAngle),
-            y: end.y - headLength * sin(angle - headAngle)
-        )
-        let p2 = CGPoint(
-            x: end.x - headLength * cos(angle + headAngle),
-            y: end.y - headLength * sin(angle + headAngle)
-        )
-
-        path.move(to: p1)
-        path.addLine(to: end)
-        path.addLine(to: p2)
+        if let wings = arrowHeadWings(tip: end, tail: start) {
+            path.move(to: wings.left)
+            path.addLine(to: end)
+            path.addLine(to: wings.right)
+        }
 
         return path
     }

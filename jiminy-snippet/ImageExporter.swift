@@ -81,46 +81,26 @@ struct ImageExporter {
 
     private static func drawArrows(_ arrows: [ArrowAnnotation], in context: CGContext) {
         for arrow in arrows {
-            let nsColor = NSColor(arrow.color)
-            nsColor.setStroke()
+            NSColor(arrow.color).setStroke()
 
             let path = NSBezierPath()
             path.lineWidth = arrow.lineWidth
             path.lineCapStyle = .round
             path.lineJoinStyle = .round
-
-            // Shaft
             path.move(to: NSPoint(x: arrow.start.x, y: arrow.start.y))
             path.line(to: NSPoint(x: arrow.end.x, y: arrow.end.y))
             path.stroke()
 
-            // Arrowhead
-            let dx = arrow.end.x - arrow.start.x
-            let dy = arrow.end.y - arrow.start.y
-            let length = sqrt(dx * dx + dy * dy)
-            guard length > 0 else { continue }
-
-            let angle = atan2(dy, dx)
-            let headLength = min(20, length * 0.3)
-            let headAngle: CGFloat = .pi / 6
-
-            let p1 = NSPoint(
-                x: arrow.end.x - headLength * cos(angle - headAngle),
-                y: arrow.end.y - headLength * sin(angle - headAngle)
-            )
-            let p2 = NSPoint(
-                x: arrow.end.x - headLength * cos(angle + headAngle),
-                y: arrow.end.y - headLength * sin(angle + headAngle)
-            )
-
-            let headPath = NSBezierPath()
-            headPath.lineWidth = arrow.lineWidth
-            headPath.lineCapStyle = .round
-            headPath.lineJoinStyle = .round
-            headPath.move(to: p1)
-            headPath.line(to: NSPoint(x: arrow.end.x, y: arrow.end.y))
-            headPath.line(to: p2)
-            headPath.stroke()
+            if let wings = arrowHeadWings(tip: arrow.end, tail: arrow.start) {
+                let headPath = NSBezierPath()
+                headPath.lineWidth = arrow.lineWidth
+                headPath.lineCapStyle = .round
+                headPath.lineJoinStyle = .round
+                headPath.move(to: NSPoint(x: wings.left.x, y: wings.left.y))
+                headPath.line(to: NSPoint(x: arrow.end.x, y: arrow.end.y))
+                headPath.line(to: NSPoint(x: wings.right.x, y: wings.right.y))
+                headPath.stroke()
+            }
         }
     }
 

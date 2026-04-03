@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var arrows: [ArrowAnnotation] = []
     @State private var texts: [TextAnnotation] = []
     @State private var selectedAnnotationId: UUID? = nil
+    @State private var keyMonitor: Any?
 
     private let scaleStep: CGFloat = 0.25
     private let minScale: CGFloat = 0.25
@@ -57,7 +58,7 @@ struct ContentView: View {
         .onChange(of: screenshotManager.capturedImage) { markUnsaved() }
         .onChange(of: rotation) { markUnsaved() }
         .onAppear {
-            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 if event.keyCode == 51 || event.keyCode == 117 { // backspace or forward delete
                     if selectedAnnotationId != nil {
                         deleteSelectedAnnotation()
@@ -72,6 +73,12 @@ struct ContentView: View {
                     }
                 }
                 return event
+            }
+        }
+        .onDisappear {
+            if let monitor = keyMonitor {
+                NSEvent.removeMonitor(monitor)
+                keyMonitor = nil
             }
         }
     }
@@ -137,7 +144,7 @@ struct ContentView: View {
                 Button {
                     selectedTool = selectedTool == tool ? nil : tool
                 } label: {
-                    Image(systemName: tool == .arrow ? "arrow.up.right" : "textformat")
+                    Image(systemName: tool.systemImage)
                         .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.bordered)

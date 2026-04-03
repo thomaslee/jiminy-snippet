@@ -10,6 +10,37 @@ import SwiftUI
 enum AnnotationTool: String, CaseIterable {
     case arrow = "Arrow"
     case text = "Text"
+
+    var systemImage: String {
+        switch self {
+        case .arrow: "arrow.up.right"
+        case .text: "textformat"
+        }
+    }
+}
+
+/// Computes the two wing points for an arrowhead at `tip` coming from `tail`.
+/// Returns `nil` if the arrow has zero length.
+func arrowHeadWings(tip: CGPoint, tail: CGPoint) -> (left: CGPoint, right: CGPoint)? {
+    let dx = tip.x - tail.x
+    let dy = tip.y - tail.y
+    let length = hypot(dx, dy)
+    guard length > 0 else { return nil }
+
+    let angle = atan2(dy, dx)
+    let headLength = min(20, length * 0.3)
+    let headAngle: CGFloat = .pi / 6
+
+    return (
+        left: CGPoint(
+            x: tip.x - headLength * cos(angle - headAngle),
+            y: tip.y - headLength * sin(angle - headAngle)
+        ),
+        right: CGPoint(
+            x: tip.x - headLength * cos(angle + headAngle),
+            y: tip.y - headLength * sin(angle + headAngle)
+        )
+    )
 }
 
 struct ArrowAnnotation: Identifiable, Equatable {
@@ -40,6 +71,4 @@ struct AnnotationPalette {
         ("White", Color.white),
         ("Black", Color.black),
     ]
-
-    static let defaultColor: Color = colors[0].color
 }
