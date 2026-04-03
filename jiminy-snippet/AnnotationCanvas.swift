@@ -20,6 +20,7 @@ struct AnnotationCanvas: View {
     @State private var dragStart: CGPoint?
     @State private var dragEnd: CGPoint?
     @State private var editingTextId: UUID?
+    @State private var editingOriginalText: String?
     @FocusState private var focusedTextId: UUID?
 
     private var imageSize: CGSize {
@@ -72,6 +73,19 @@ struct AnnotationCanvas: View {
         }
     }
 
+    private func deleteSelectedAnnotation() {
+        guard let id = selectedAnnotationId, editingTextId == nil else {
+            return
+        }
+        if let index = arrows.firstIndex(where: { $0.id == id }) {
+            arrows.remove(at: index)
+            selectedAnnotationId = nil
+        } else if let index = texts.firstIndex(where: { $0.id == id }) {
+            texts.remove(at: index)
+            selectedAnnotationId = nil
+        }
+    }
+
     private func commitTextEditing(id: UUID) {
         if let index = texts.firstIndex(where: { $0.id == id }) {
             if texts[index].text.isEmpty {
@@ -81,6 +95,26 @@ struct AnnotationCanvas: View {
             }
         }
         editingTextId = nil
+        editingOriginalText = nil
+    }
+
+    private func cancelTextEditing(id: UUID) {
+        if let index = texts.firstIndex(where: { $0.id == id }) {
+            if let original = editingOriginalText, !original.isEmpty {
+                texts[index].text = original
+                texts[index].isEditing = false
+            } else {
+                texts[index].isEditing = false
+            }
+        }
+        editingTextId = nil
+        editingOriginalText = nil
+        focusedTextId = nil
+
+        // Remove empty texts after state has settled
+        DispatchQueue.main.async {
+            texts.removeAll { $0.text.isEmpty }
+        }
     }
 
     // MARK: - Annotations Overlay
@@ -116,7 +150,8 @@ struct AnnotationCanvas: View {
                 .textFieldStyle(.plain)
                 .fixedSize()
                 .focused($focusedTextId, equals: annotationId)
-                .position(annotation.wrappedValue.position)
+                .offset(x: annotation.wrappedValue.position.x,
+                        y: annotation.wrappedValue.position.y)
                 .onAppear {
                     focusedTextId = annotationId
                 }
@@ -126,7 +161,11 @@ struct AnnotationCanvas: View {
                     }
                     annotation.wrappedValue.isEditing = false
                     editingTextId = nil
+                    editingOriginalText = nil
                     focusedTextId = nil
+                }
+                .onExitCommand {
+                    cancelTextEditing(id: annotation.wrappedValue.id)
                 }
         } else {
             DraggableTextView(
@@ -135,6 +174,7 @@ struct AnnotationCanvas: View {
                 isSelected: selectedAnnotationId == annotation.wrappedValue.id,
                 onSelect: { selectedAnnotationId = annotation.wrappedValue.id },
                 onStartEditing: {
+                    editingOriginalText = annotation.wrappedValue.text
                     editingTextId = annotation.wrappedValue.id
                     selectedAnnotationId = annotation.wrappedValue.id
                     annotation.wrappedValue.isEditing = true
@@ -204,6 +244,7 @@ struct AnnotationCanvas: View {
                 isEditing: true
             )
             texts.append(annotation)
+            editingOriginalText = ""
             editingTextId = annotation.id
             focusedTextId = annotation.id
             selectedTool = nil
@@ -299,7 +340,7 @@ struct DraggableTextView: View {
                     .stroke(Color.accentColor, lineWidth: 2)
                     .opacity(isSelected ? 1 : 0)
             )
-            .position(currentPosition)
+            .offset(x: currentPosition.x, y: currentPosition.y)
             .shadow(color: .black.opacity(0.5), radius: 1, x: 1, y: 1)
             .gesture(
                 DragGesture(minimumDistance: 3)

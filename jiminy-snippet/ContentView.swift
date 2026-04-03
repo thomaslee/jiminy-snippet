@@ -51,6 +51,17 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 800, minHeight: 600)
+        .onAppear {
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                if event.keyCode == 51 || event.keyCode == 117 { // backspace or forward delete
+                    if selectedAnnotationId != nil {
+                        deleteSelectedAnnotation()
+                        return nil
+                    }
+                }
+                return event
+            }
+        }
     }
 
     private var emptyState: some View {
@@ -209,6 +220,17 @@ struct ContentView: View {
         }
         .help("Undo last annotation")
         .disabled(arrows.isEmpty && texts.isEmpty)
+    }
+
+    private func deleteSelectedAnnotation() {
+        guard let id = selectedAnnotationId else { return }
+        if let index = arrows.firstIndex(where: { $0.id == id }) {
+            arrows.remove(at: index)
+            selectedAnnotationId = nil
+        } else if let index = texts.firstIndex(where: { $0.id == id }) {
+            texts.remove(at: index)
+            selectedAnnotationId = nil
+        }
     }
 
     private func clearAnnotations() {
