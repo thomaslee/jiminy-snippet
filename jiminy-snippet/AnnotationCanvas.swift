@@ -19,6 +19,7 @@ struct AnnotationCanvas: View {
     @State private var dragStart: CGPoint?
     @State private var dragEnd: CGPoint?
     @State private var editingTextId: UUID?
+    @State private var selectedAnnotationId: UUID?
     @FocusState private var focusedTextId: UUID?
 
     private var imageSize: CGSize {
@@ -87,10 +88,15 @@ struct AnnotationCanvas: View {
     @ViewBuilder
     private var annotationsOverlay: some View {
         ForEach(Array(arrows.enumerated()), id: \.element.id) { index, arrow in
-            DraggableArrowView(arrow: arrow) { newStart, newEnd in
-                arrows[index].start = newStart
-                arrows[index].end = newEnd
-            }
+            DraggableArrowView(
+                arrow: arrow,
+                isSelected: selectedAnnotationId == arrow.id,
+                onSelect: { selectedAnnotationId = arrow.id },
+                onMove: { newStart, newEnd in
+                    arrows[index].start = newStart
+                    arrows[index].end = newEnd
+                }
+            )
         }
 
         ForEach($texts) { $annotation in
@@ -126,8 +132,11 @@ struct AnnotationCanvas: View {
             DraggableTextView(
                 annotation: annotation,
                 selectedTool: selectedTool,
+                isSelected: selectedAnnotationId == annotation.wrappedValue.id,
+                onSelect: { selectedAnnotationId = annotation.wrappedValue.id },
                 onStartEditing: {
                     editingTextId = annotation.wrappedValue.id
+                    selectedAnnotationId = annotation.wrappedValue.id
                     annotation.wrappedValue.isEditing = true
                 }
             )
@@ -166,6 +175,7 @@ struct AnnotationCanvas: View {
             .simultaneousGesture(
                 SpatialTapGesture()
                     .onEnded { value in
+                        selectedAnnotationId = nil
                         handleTap(at: value.location)
                     }
             )
@@ -203,6 +213,8 @@ struct AnnotationCanvas: View {
 
 struct DraggableArrowView: View {
     let arrow: ArrowAnnotation
+    let isSelected: Bool
+    let onSelect: () -> Void
     let onMove: (CGPoint, CGPoint) -> Void
 
     @State private var dragOffset: CGSize = .zero
@@ -218,6 +230,12 @@ struct DraggableArrowView: View {
 
     var body: some View {
         ZStack {
+            // Selection highlight behind the arrow
+            if isSelected {
+                ArrowShape(start: currentStart, end: currentEnd)
+                    .stroke(Color.accentColor.opacity(0.4), lineWidth: arrow.lineWidth + 8)
+            }
+
             // Visible arrow
             ArrowShape(start: currentStart, end: currentEnd)
                 .stroke(arrow.color, lineWidth: arrow.lineWidth)
@@ -230,11 +248,15 @@ struct DraggableArrowView: View {
             ArrowShape(start: currentStart, end: currentEnd)
                 .stroke(style: StrokeStyle(lineWidth: 20))
         )
+        .onTapGesture {
+            onSelect()
+        }
         .gesture(
             DragGesture(minimumDistance: 3)
                 .onChanged { value in
                     isDragging = true
                     dragOffset = value.translation
+                    onSelect()
                 }
                 .onEnded { value in
                     onMove(currentStart, currentEnd)
@@ -250,6 +272,8 @@ struct DraggableArrowView: View {
 struct DraggableTextView: View {
     @Binding var annotation: TextAnnotation
     let selectedTool: AnnotationTool
+    let isSelected: Bool
+    let onSelect: () -> Void
     let onStartEditing: () -> Void
 
     @State private var dragOffset: CGSize = .zero
@@ -266,12 +290,20 @@ struct DraggableTextView: View {
             .font(.system(size: annotation.fontSize, weight: .bold))
             .foregroundStyle(annotation.color)
             .fixedSize()
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Color.accentColor, lineWidth: 2)
+                    .opacity(isSelected ? 1 : 0)
+            )
             .position(currentPosition)
             .shadow(color: .black.opacity(0.5), radius: 1, x: 1, y: 1)
             .gesture(
                 DragGesture(minimumDistance: 3)
                     .onChanged { value in
                         dragOffset = value.translation
+                        onSelect()
                     }
                     .onEnded { value in
                         annotation.position = currentPosition
@@ -279,6 +311,7 @@ struct DraggableTextView: View {
                     }
             )
             .onTapGesture {
+                onSelect()
                 if selectedTool == .text {
                     onStartEditing()
                 }
