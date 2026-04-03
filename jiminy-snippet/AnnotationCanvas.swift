@@ -12,6 +12,7 @@ struct AnnotationCanvas: View {
     @Binding var arrows: [ArrowAnnotation]
     @Binding var texts: [TextAnnotation]
     @Binding var selectedTool: AnnotationTool?
+    @Binding var selectedAnnotationId: UUID?
     let selectedColor: Color
     let scale: CGFloat
     let rotation: Double
@@ -19,7 +20,6 @@ struct AnnotationCanvas: View {
     @State private var dragStart: CGPoint?
     @State private var dragEnd: CGPoint?
     @State private var editingTextId: UUID?
-    @State private var selectedAnnotationId: UUID?
     @FocusState private var focusedTextId: UUID?
 
     private var imageSize: CGSize {

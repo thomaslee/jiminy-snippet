@@ -17,6 +17,7 @@ struct ContentView: View {
 
     @State private var arrows: [ArrowAnnotation] = []
     @State private var texts: [TextAnnotation] = []
+    @State private var selectedAnnotationId: UUID? = nil
 
     private let scaleStep: CGFloat = 0.25
     private let minScale: CGFloat = 0.25
@@ -40,6 +41,7 @@ struct ContentView: View {
                     arrows: $arrows,
                     texts: $texts,
                     selectedTool: $selectedTool,
+                    selectedAnnotationId: $selectedAnnotationId,
                     selectedColor: selectedColor,
                     scale: scale,
                     rotation: rotation
@@ -125,6 +127,13 @@ struct ContentView: View {
             ForEach(Array(AnnotationPalette.colors.enumerated()), id: \.offset) { index, item in
                 Button {
                     selectedColorIndex = index
+                    if let id = selectedAnnotationId {
+                        if let i = arrows.firstIndex(where: { $0.id == id }) {
+                            arrows[i].color = item.color
+                        } else if let i = texts.firstIndex(where: { $0.id == id }) {
+                            texts[i].color = item.color
+                        }
+                    }
                 } label: {
                     Circle()
                         .fill(item.color)
