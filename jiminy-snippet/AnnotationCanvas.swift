@@ -320,6 +320,7 @@ struct DraggableTextView: View {
     let onStartEditing: () -> Void
 
     @State private var dragOffset: CGSize = .zero
+    @State private var lastTapTime: Date?
 
     private var currentPosition: CGPoint {
         CGPoint(
@@ -355,8 +356,15 @@ struct DraggableTextView: View {
             )
             .onTapGesture {
                 onSelect()
-                if selectedTool == .text {
-                    onStartEditing()
+                let now = Date()
+                if let last = lastTapTime,
+                   now.timeIntervalSince(last) < NSEvent.doubleClickInterval {
+                    lastTapTime = nil
+                    DispatchQueue.main.async {
+                        onStartEditing()
+                    }
+                } else {
+                    lastTapTime = now
                 }
             }
     }

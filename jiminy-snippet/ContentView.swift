@@ -59,6 +59,13 @@ struct ContentView: View {
                         return nil
                     }
                 }
+                if event.keyCode == 53 { // escape
+                    let isEditingText = texts.contains { $0.isEditing }
+                    if !isEditingText && selectedAnnotationId != nil {
+                        selectedAnnotationId = nil
+                        return nil
+                    }
+                }
                 return event
             }
         }
