@@ -10,7 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(ScreenshotManager.self) private var screenshotManager
 
-    @State private var selectedTool: AnnotationTool = .arrow
+    @State private var selectedTool: AnnotationTool? = nil
     @State private var selectedColorIndex: Int = 0
     @State private var scale: CGFloat = 1.0
     @State private var rotation: Double = 0
@@ -39,7 +39,7 @@ struct ContentView: View {
                     image: image,
                     arrows: $arrows,
                     texts: $texts,
-                    selectedTool: selectedTool,
+                    selectedTool: $selectedTool,
                     selectedColor: selectedColor,
                     scale: scale,
                     rotation: rotation
@@ -109,7 +109,7 @@ struct ContentView: View {
         HStack(spacing: 4) {
             ForEach(AnnotationTool.allCases, id: \.self) { tool in
                 Button {
-                    selectedTool = tool
+                    selectedTool = selectedTool == tool ? nil : tool
                 } label: {
                     Image(systemName: tool == .arrow ? "arrow.up.right" : "textformat")
                         .frame(width: 28, height: 28)

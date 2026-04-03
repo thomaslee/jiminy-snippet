@@ -11,7 +11,7 @@ struct AnnotationCanvas: View {
     let image: NSImage
     @Binding var arrows: [ArrowAnnotation]
     @Binding var texts: [TextAnnotation]
-    let selectedTool: AnnotationTool
+    @Binding var selectedTool: AnnotationTool?
     let selectedColor: Color
     let scale: CGFloat
     let rotation: Double
@@ -167,6 +167,7 @@ struct AnnotationCanvas: View {
                                 color: selectedColor
                             )
                             arrows.append(arrow)
+                            selectedTool = nil
                         }
                         dragStart = nil
                         dragEnd = nil
@@ -205,6 +206,7 @@ struct AnnotationCanvas: View {
             texts.append(annotation)
             editingTextId = annotation.id
             focusedTextId = annotation.id
+            selectedTool = nil
         }
     }
 }
@@ -271,7 +273,7 @@ struct DraggableArrowView: View {
 
 struct DraggableTextView: View {
     @Binding var annotation: TextAnnotation
-    let selectedTool: AnnotationTool
+    let selectedTool: AnnotationTool?
     let isSelected: Bool
     let onSelect: () -> Void
     let onStartEditing: () -> Void
