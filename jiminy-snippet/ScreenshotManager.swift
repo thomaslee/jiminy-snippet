@@ -12,7 +12,13 @@ import ScreenCaptureKit
 @Observable
 @MainActor
 final class ScreenshotManager {
+    static var shared: ScreenshotManager?
     var capturedImage: NSImage?
+    var hasUnsavedChanges = false
+
+    init() {
+        ScreenshotManager.shared = self
+    }
 
     func captureFullscreen() {
         // Use miniaturize instead of orderOut so macOS doesn't lose window state

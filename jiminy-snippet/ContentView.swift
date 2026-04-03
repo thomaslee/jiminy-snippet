@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Environment(ScreenshotManager.self) private var screenshotManager
@@ -51,6 +52,10 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 800, minHeight: 600)
+        .onChange(of: arrows) { markUnsaved() }
+        .onChange(of: texts) { markUnsaved() }
+        .onChange(of: screenshotManager.capturedImage) { markUnsaved() }
+        .onChange(of: rotation) { markUnsaved() }
         .onAppear {
             NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 if event.keyCode == 51 || event.keyCode == 117 { // backspace or forward delete
@@ -99,6 +104,7 @@ struct ContentView: View {
                 Divider().frame(height: 24)
                 rotateControls
                 Spacer()
+                exportMenu
                 undoButton
             }
         }
@@ -215,6 +221,21 @@ struct ContentView: View {
         }
     }
 
+    private var exportMenu: some View {
+        Menu {
+            Button("With Annotations") {
+                exportImage(includeAnnotations: true)
+            }
+            Button("Without Annotations") {
+                exportImage(includeAnnotations: false)
+            }
+        } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
+        }
+        .menuStyle(.borderedButton)
+        .fixedSize()
+    }
+
     private var undoButton: some View {
         Button {
             if !texts.isEmpty {
@@ -243,6 +264,35 @@ struct ContentView: View {
     private func clearAnnotations() {
         arrows.removeAll()
         texts.removeAll()
+    }
+
+    private func exportImage(includeAnnotations: Bool) {
+        guard let image = screenshotManager.capturedImage else { return }
+
+        guard let rendered = ImageExporter.render(
+            image: image,
+            arrows: arrows,
+            texts: texts,
+            rotation: rotation,
+            includeAnnotations: includeAnnotations
+        ) else { return }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = "screenshot.png"
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        if ImageExporter.save(image: rendered, to: url) {
+            screenshotManager.hasUnsavedChanges = false
+        }
+    }
+
+    private func markUnsaved() {
+        if screenshotManager.capturedImage != nil {
+            screenshotManager.hasUnsavedChanges = true
+        }
     }
 }
 

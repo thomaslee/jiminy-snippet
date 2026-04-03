@@ -12,7 +12,7 @@ enum AnnotationTool: String, CaseIterable {
     case text = "Text"
 }
 
-struct ArrowAnnotation: Identifiable {
+struct ArrowAnnotation: Identifiable, Equatable {
     let id = UUID()
     var start: CGPoint
     var end: CGPoint
@@ -20,7 +20,7 @@ struct ArrowAnnotation: Identifiable {
     var lineWidth: CGFloat = 4
 }
 
-struct TextAnnotation: Identifiable {
+struct TextAnnotation: Identifiable, Equatable {
     let id = UUID()
     var position: CGPoint
     var text: String

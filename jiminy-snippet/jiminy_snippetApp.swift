@@ -38,6 +38,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let manager = ScreenshotManager.shared,
+              manager.hasUnsavedChanges else {
+            return .terminateNow
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "You have unsaved changes"
+        alert.informativeText = "Your screenshot has not been exported since the last edit. Quit anyway?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        return response == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
+
     private func ensureWindowVisible() {
         for window in NSApplication.shared.windows {
             if window.canBecomeMain {
