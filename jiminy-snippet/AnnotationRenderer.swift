@@ -10,9 +10,16 @@ enum RenderConstants {
     static let arrowHitWidth: CGFloat = 20
     static let handleSize: CGFloat = 10
     static let handleHitRadius: CGFloat = 12
-    static let selectionPadding: CGFloat = 4
     static let textPaddingH: CGFloat = 4
     static let textPaddingV: CGFloat = 2
+
+    /// The text's measured size plus padding on all sides.
+    static func paddedTextSize(_ measured: CGSize) -> CGSize {
+        CGSize(
+            width: measured.width + textPaddingH * 2,
+            height: measured.height + textPaddingV * 2
+        )
+    }
 }
 
 /// Draws annotations into a SwiftUI `GraphicsContext` (used by Canvas).
@@ -20,34 +27,49 @@ enum AnnotationRenderer {
 
     // MARK: - Arrow Drawing
 
-    static func drawArrow(_ arrow: ArrowAnnotation, in context: inout GraphicsContext) {
+    /// Draws an arrow with optional selection highlight. Pass `selected: true` to show selection chrome + handles.
+    static func drawArrow(_ arrow: ArrowAnnotation, selected: Bool, in context: inout GraphicsContext) {
         let path = arrowPath(start: arrow.start, end: arrow.end)
-        context.stroke(
-            path,
-            with: .color(arrow.color),
-            style: StrokeStyle(lineWidth: arrow.lineWidth, lineCap: .round, lineJoin: .round)
-        )
-    }
+        let style = StrokeStyle(lineWidth: arrow.lineWidth, lineCap: .round, lineJoin: .round)
 
-    static func drawArrowSelection(_ arrow: ArrowAnnotation, in context: inout GraphicsContext) {
-        let path = arrowPath(start: arrow.start, end: arrow.end)
-        context.stroke(
-            path,
-            with: .color(.accentColor.opacity(0.4)),
-            style: StrokeStyle(lineWidth: arrow.lineWidth + 8, lineCap: .round, lineJoin: .round)
-        )
+        if selected {
+            context.stroke(
+                path,
+                with: .color(.accentColor.opacity(0.4)),
+                style: StrokeStyle(lineWidth: arrow.lineWidth + 8, lineCap: .round, lineJoin: .round)
+            )
+        }
+
+        context.stroke(path, with: .color(arrow.color), style: style)
+
+        if selected {
+            drawHandle(at: arrow.start, in: &context)
+            drawHandle(at: arrow.end, in: &context)
+        }
     }
 
     // MARK: - Text Drawing
 
-    static func drawText(_ annotation: TextAnnotation, in context: inout GraphicsContext) {
+    /// Resolves and measures a text annotation. Call once, then pass results to `drawText` and `drawTextSelection`.
+    static func resolveText(
+        _ annotation: TextAnnotation,
+        in context: GraphicsContext
+    ) -> (resolved: GraphicsContext.ResolvedText, size: CGSize) {
         let text = Text(annotation.text.isEmpty ? " " : annotation.text)
             .font(.system(size: annotation.fontSize, weight: .bold))
             .foregroundStyle(annotation.color)
-
         let resolved = context.resolve(text)
         let size = resolved.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity))
+        return (resolved, size)
+    }
 
+    /// Draws a text annotation using pre-resolved text.
+    static func drawText(
+        _ annotation: TextAnnotation,
+        resolved: GraphicsContext.ResolvedText,
+        size: CGSize,
+        in context: inout GraphicsContext
+    ) {
         context.drawLayer { ctx in
             ctx.translateBy(x: annotation.position.x, y: annotation.position.y)
             ctx.rotate(by: .degrees(annotation.rotation))
@@ -57,29 +79,30 @@ enum AnnotationRenderer {
         }
     }
 
+    /// Draws selection chrome and resize handle for a text annotation.
     static func drawTextSelection(
         _ annotation: TextAnnotation,
         size: CGSize,
         in context: inout GraphicsContext
     ) {
-        let localRect = CGRect(
-            origin: .zero,
-            size: CGSize(
-                width: size.width + RenderConstants.textPaddingH * 2,
-                height: size.height + RenderConstants.textPaddingV * 2
-            )
-        )
+        let padded = RenderConstants.paddedTextSize(size)
         context.drawLayer { ctx in
             ctx.translateBy(x: annotation.position.x, y: annotation.position.y)
             ctx.rotate(by: .degrees(annotation.rotation))
-            let path = Path(roundedRect: localRect, cornerRadius: 4)
+            let path = Path(roundedRect: CGRect(origin: .zero, size: padded), cornerRadius: 4)
             ctx.stroke(path, with: .color(.accentColor), lineWidth: 2)
         }
+        let handlePoint = localToCanvas(
+            CGPoint(x: padded.width + RenderConstants.handleSize / 2,
+                    y: padded.height + RenderConstants.handleSize / 2),
+            origin: annotation.position, angle: annotation.rotation
+        )
+        drawHandle(at: handlePoint, in: &context)
     }
 
     // MARK: - Handles
 
-    static func drawEndpointHandle(at point: CGPoint, in context: inout GraphicsContext) {
+    static func drawHandle(at point: CGPoint, in context: inout GraphicsContext) {
         let size = RenderConstants.handleSize
         let rect = CGRect(
             x: point.x - size / 2,
@@ -92,23 +115,8 @@ enum AnnotationRenderer {
         context.stroke(circle, with: .color(.accentColor), lineWidth: 2)
     }
 
-    static func drawResizeHandle(at point: CGPoint, in context: inout GraphicsContext) {
-        drawEndpointHandle(at: point, in: &context)
-    }
+    // MARK: - Text Measurement (NSFont, for hit testing)
 
-    // MARK: - Text Measurement
-
-    static func measureText(
-        _ annotation: TextAnnotation,
-        in context: GraphicsContext
-    ) -> CGSize {
-        let text = Text(annotation.text.isEmpty ? " " : annotation.text)
-            .font(.system(size: annotation.fontSize, weight: .bold))
-        let resolved = context.resolve(text)
-        return resolved.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity))
-    }
-
-    /// Measures text without needing a GraphicsContext (for hit testing).
     static func measureText(_ annotation: TextAnnotation) -> CGSize {
         let font = NSFont.boldSystemFont(ofSize: annotation.fontSize)
         let string = annotation.text.isEmpty ? " " : annotation.text
@@ -118,25 +126,8 @@ enum AnnotationRenderer {
 
     // MARK: - Geometry Helpers
 
-    /// Bounding rect for a text annotation including padding.
-    static func textBoundingRect(for annotation: TextAnnotation, measuredSize: CGSize) -> CGRect {
-        CGRect(
-            x: annotation.position.x,
-            y: annotation.position.y,
-            width: measuredSize.width + RenderConstants.textPaddingH * 2,
-            height: measuredSize.height + RenderConstants.textPaddingV * 2
-        )
-    }
-
-    /// Bottom-trailing corner point for the resize handle, in canvas coordinates.
-    static func resizeHandlePoint(for annotation: TextAnnotation, measuredSize: CGSize) -> CGPoint {
-        let localX = measuredSize.width + RenderConstants.textPaddingH * 2 + RenderConstants.handleSize / 2
-        let localY = measuredSize.height + RenderConstants.textPaddingV * 2 + RenderConstants.handleSize / 2
-        return rotateLocalPoint(CGPoint(x: localX, y: localY), around: annotation.position, angle: annotation.rotation)
-    }
-
-    /// Transforms a point from a text annotation's local coordinate space to canvas coordinates.
-    static func rotateLocalPoint(_ local: CGPoint, around origin: CGPoint, angle: Double) -> CGPoint {
+    /// Transforms a point from a text annotation's local space to canvas coordinates.
+    static func localToCanvas(_ local: CGPoint, origin: CGPoint, angle: Double) -> CGPoint {
         let rad = angle * .pi / 180
         let cosA = cos(rad)
         let sinA = sin(rad)
@@ -144,6 +135,16 @@ enum AnnotationRenderer {
             x: origin.x + local.x * cosA - local.y * sinA,
             y: origin.y + local.x * sinA + local.y * cosA
         )
+    }
+
+    /// Transforms a canvas point into a text annotation's local (unrotated) space.
+    static func canvasToLocal(_ point: CGPoint, origin: CGPoint, angle: Double) -> CGPoint {
+        let dx = point.x - origin.x
+        let dy = point.y - origin.y
+        let rad = -angle * .pi / 180
+        let cosA = cos(rad)
+        let sinA = sin(rad)
+        return CGPoint(x: dx * cosA - dy * sinA, y: dx * sinA + dy * cosA)
     }
 
     /// Builds a `Path` for an arrow (shaft + arrowhead wings).

@@ -87,40 +87,16 @@ struct AnnotationCanvas: View {
 
             // Draw arrows
             for arrow in arrows {
-                let current = currentArrowPoints(for: arrow)
-                let displayArrow = ArrowAnnotation(
-                    start: current.start, end: current.end,
-                    color: arrow.color, lineWidth: arrow.lineWidth
-                )
-
-                if selectedAnnotationId == arrow.id {
-                    AnnotationRenderer.drawArrowSelection(displayArrow, in: &context)
-                }
-                AnnotationRenderer.drawArrow(displayArrow, in: &context)
-                if selectedAnnotationId == arrow.id {
-                    AnnotationRenderer.drawEndpointHandle(at: current.start, in: &context)
-                    AnnotationRenderer.drawEndpointHandle(at: current.end, in: &context)
-                }
+                let selected = selectedAnnotationId == arrow.id
+                AnnotationRenderer.drawArrow(arrow, selected: selected, in: &context)
             }
 
             // Draw text annotations (skip the one being edited)
             for annotation in texts where annotation.id != editingTextId {
-                let current = currentTextState(for: annotation)
-                let displayAnnotation = TextAnnotation(
-                    position: current.position, text: annotation.text,
-                    color: annotation.color, fontSize: current.fontSize,
-                    rotation: annotation.rotation
-                )
-
-                let size = AnnotationRenderer.measureText(displayAnnotation, in: context)
-
-                AnnotationRenderer.drawText(displayAnnotation, in: &context)
+                let (resolved, size) = AnnotationRenderer.resolveText(annotation, in: context)
+                AnnotationRenderer.drawText(annotation, resolved: resolved, size: size, in: &context)
                 if selectedAnnotationId == annotation.id {
-                    AnnotationRenderer.drawTextSelection(displayAnnotation, size: size, in: &context)
-                    let handlePoint = AnnotationRenderer.resizeHandlePoint(
-                        for: displayAnnotation, measuredSize: size
-                    )
-                    AnnotationRenderer.drawResizeHandle(at: handlePoint, in: &context)
+                    AnnotationRenderer.drawTextSelection(annotation, size: size, in: &context)
                 }
             }
 
@@ -408,17 +384,6 @@ struct AnnotationCanvas: View {
         focusedTextId = nil
     }
 
-    // MARK: - Helpers
-
-    /// Returns the current arrow points accounting for in-progress drag operations.
-    private func currentArrowPoints(for arrow: ArrowAnnotation) -> (start: CGPoint, end: CGPoint) {
-        (arrow.start, arrow.end)
-    }
-
-    /// Returns the current text state accounting for in-progress drag operations.
-    private func currentTextState(for annotation: TextAnnotation) -> (position: CGPoint, fontSize: CGFloat) {
-        (annotation.position, annotation.fontSize)
-    }
 }
 
 // MARK: - Drag Operation

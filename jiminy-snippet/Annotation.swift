@@ -61,6 +61,27 @@ struct TextAnnotation: Identifiable, Equatable {
     var isEditing: Bool = false
 }
 
+/// Rotates an NSImage by 90° and returns a new image with swapped dimensions.
+func rotateImage(_ image: NSImage, clockwise: Bool) -> NSImage {
+    let originalSize = image.size
+    let newSize = NSSize(width: originalSize.height, height: originalSize.width)
+    let rotated = NSImage(size: newSize)
+    rotated.lockFocusFlipped(false)
+    let transform = NSAffineTransform()
+    transform.translateX(by: newSize.width / 2, yBy: newSize.height / 2)
+    transform.rotate(byDegrees: clockwise ? -90 : 90)
+    transform.translateX(by: -originalSize.width / 2, yBy: -originalSize.height / 2)
+    transform.concat()
+    image.draw(
+        in: NSRect(origin: .zero, size: originalSize),
+        from: .zero,
+        operation: .copy,
+        fraction: 1.0
+    )
+    rotated.unlockFocus()
+    return rotated
+}
+
 struct AnnotationPalette {
     static let colors: [(name: String, color: Color)] = [
         ("Orange", Color(red: 1.0, green: 0.6, blue: 0.0)),

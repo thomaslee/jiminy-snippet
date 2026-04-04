@@ -366,7 +366,7 @@ struct ContentView: View {
         let w = image.size.width
         let h = image.size.height
 
-        screenshotManager.capturedImage = screenshotManager.rotateImage(image, clockwise: clockwise)
+        screenshotManager.capturedImage = rotateImage(image, clockwise: clockwise)
 
         for i in arrows.indices {
             arrows[i].start = rotatePoint(arrows[i].start, imageWidth: w, imageHeight: h, clockwise: clockwise)

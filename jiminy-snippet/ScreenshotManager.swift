@@ -21,7 +21,6 @@ final class ScreenshotManager {
     }
 
     func captureFullscreen() {
-        // Use miniaturize instead of orderOut so macOS doesn't lose window state
         let visibleWindows = NSApplication.shared.windows.filter { $0.isVisible }
         for window in visibleWindows {
             window.setIsVisible(false)
@@ -60,26 +59,6 @@ final class ScreenshotManager {
 
             restoreWindows(visibleWindows)
         }
-    }
-
-    func rotateImage(_ image: NSImage, clockwise: Bool) -> NSImage {
-        let originalSize = image.size
-        let newSize = NSSize(width: originalSize.height, height: originalSize.width)
-        let rotated = NSImage(size: newSize)
-        rotated.lockFocusFlipped(false)
-        let transform = NSAffineTransform()
-        transform.translateX(by: newSize.width / 2, yBy: newSize.height / 2)
-        transform.rotate(byDegrees: clockwise ? -90 : 90)
-        transform.translateX(by: -originalSize.width / 2, yBy: -originalSize.height / 2)
-        transform.concat()
-        image.draw(
-            in: NSRect(origin: .zero, size: originalSize),
-            from: .zero,
-            operation: .copy,
-            fraction: 1.0
-        )
-        rotated.unlockFocus()
-        return rotated
     }
 
     private func restoreWindows(_ windows: [NSWindow]) {
