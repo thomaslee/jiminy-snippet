@@ -15,59 +15,378 @@ struct AnnotationCanvas: View {
     @Binding var selectedAnnotationId: UUID?
     let selectedColor: Color
     let scale: CGFloat
+    let rotation: Double
 
-    @State private var dragStart: CGPoint?
-    @State private var dragEnd: CGPoint?
+    // MARK: - Gesture State
+
+    @State private var dragOperation: DragOperation = .none
     @State private var editingTextId: UUID?
     @State private var editingOriginalText: String?
     @FocusState private var focusedTextId: UUID?
+    @State private var lastTapTime: Date?
+    @State private var lastTapLocation: CGPoint?
 
-    private var imageSize: CGSize {
-        image.size
+    private var imageSize: CGSize { image.size }
+
+    private var textSizes: [UUID: CGSize] {
+        var sizes: [UUID: CGSize] = [:]
+        for annotation in texts {
+            sizes[annotation.id] = AnnotationRenderer.measureText(annotation)
+        }
+        return sizes
+    }
+
+    private var rotatedImageSize: CGSize {
+        let normalized = ((Int(rotation) % 360) + 360) % 360
+        let isRotated90 = normalized == 90 || normalized == 270
+        return isRotated90
+            ? CGSize(width: imageSize.height, height: imageSize.width)
+            : imageSize
     }
 
     var body: some View {
-        GeometryReader { geometry in
+        GeometryReader { _ in
             ScrollView([.horizontal, .vertical]) {
                 ZStack(alignment: .topLeading) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .frame(width: imageSize.width, height: imageSize.height)
+                    // Canvas draws image + all annotations
+                    annotationCanvas
 
-                    // Interaction layer for creating new annotations (below existing ones)
-                    interactionLayer
+                    // Gesture overlay
+                    gestureLayer
 
-                    // Existing annotations on top so their gestures win
-                    annotationsOverlay
-
-                    // Click-catching layer to commit text editing when clicking outside
+                    // Click-catcher to commit text editing
                     if editingTextId != nil {
                         Color.clear
                             .contentShape(Rectangle())
                             .frame(width: imageSize.width, height: imageSize.height)
                             .onTapGesture {
-                                if let editingId = editingTextId {
-                                    commitTextEditing(id: editingId)
+                                if let id = editingTextId {
+                                    commitTextEditing(id: id)
                                     focusedTextId = nil
                                 }
                             }
                     }
 
-                    // Arrow drawing preview (topmost so it's always visible)
-                    if selectedTool == .arrow, let start = dragStart, let end = dragEnd {
-                        ArrowShape(start: start, end: end)
-                            .stroke(selectedColor, lineWidth: 4)
-                            .allowsHitTesting(false)
+                    // TextField overlay for editing text
+                    if let editingId = editingTextId,
+                       let annotation = texts.first(where: { $0.id == editingId }) {
+                        textFieldOverlay(for: annotation)
                     }
                 }
                 .frame(width: imageSize.width, height: imageSize.height)
                 .scaleEffect(scale)
+                .rotationEffect(.degrees(rotation))
                 .frame(
-                    width: imageSize.width * scale,
-                    height: imageSize.height * scale
+                    width: rotatedImageSize.width * scale,
+                    height: rotatedImageSize.height * scale
                 )
             }
             .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+
+    // MARK: - Canvas
+
+    private var annotationCanvas: some View {
+        Canvas { context, _ in
+            // Draw the base image
+            context.draw(
+                Image(nsImage: image),
+                in: CGRect(origin: .zero, size: imageSize)
+            )
+
+            // Draw arrows
+            for arrow in arrows {
+                let current = currentArrowPoints(for: arrow)
+                let displayArrow = ArrowAnnotation(
+                    start: current.start, end: current.end,
+                    color: arrow.color, lineWidth: arrow.lineWidth
+                )
+
+                if selectedAnnotationId == arrow.id {
+                    AnnotationRenderer.drawArrowSelection(displayArrow, in: &context)
+                }
+                AnnotationRenderer.drawArrow(displayArrow, in: &context)
+                if selectedAnnotationId == arrow.id {
+                    AnnotationRenderer.drawEndpointHandle(at: current.start, in: &context)
+                    AnnotationRenderer.drawEndpointHandle(at: current.end, in: &context)
+                }
+            }
+
+            // Draw text annotations (skip the one being edited)
+            for annotation in texts where annotation.id != editingTextId {
+                let current = currentTextState(for: annotation)
+                let displayAnnotation = TextAnnotation(
+                    position: current.position, text: annotation.text,
+                    color: annotation.color, fontSize: current.fontSize
+                )
+
+                let size = AnnotationRenderer.measureText(displayAnnotation, in: context)
+
+                AnnotationRenderer.drawText(displayAnnotation, in: &context)
+                if selectedAnnotationId == annotation.id {
+                    AnnotationRenderer.drawTextSelection(displayAnnotation, size: size, in: &context)
+                    let handlePoint = AnnotationRenderer.resizeHandlePoint(
+                        for: displayAnnotation, measuredSize: size
+                    )
+                    AnnotationRenderer.drawResizeHandle(at: handlePoint, in: &context)
+                }
+            }
+
+            // Arrow creation preview
+            if case .creatingArrow(let start, let end) = dragOperation {
+                let previewPath = AnnotationRenderer.arrowPath(start: start, end: end)
+                context.stroke(
+                    previewPath,
+                    with: .color(selectedColor),
+                    style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
+                )
+            }
+        }
+        .frame(width: imageSize.width, height: imageSize.height)
+        .allowsHitTesting(false)
+    }
+
+    // MARK: - Gesture Layer
+
+    private var gestureLayer: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .frame(width: imageSize.width, height: imageSize.height)
+            .gesture(
+                DragGesture(minimumDistance: 3)
+                    .onChanged { value in
+                        handleDragChanged(value)
+                    }
+                    .onEnded { value in
+                        handleDragEnded(value)
+                    }
+            )
+            .simultaneousGesture(
+                SpatialTapGesture()
+                    .onEnded { value in
+                        handleTap(at: value.location)
+                    }
+            )
+            .allowsHitTesting(editingTextId == nil)
+    }
+
+    // MARK: - TextField Overlay
+
+    private func textFieldOverlay(for annotation: TextAnnotation) -> some View {
+        let annotationId = annotation.id
+        let textBinding = Binding<String>(
+            get: { texts.first(where: { $0.id == annotationId })?.text ?? "" },
+            set: { newValue in
+                if let index = texts.firstIndex(where: { $0.id == annotationId }) {
+                    texts[index].text = newValue
+                }
+            }
+        )
+        return TextField("", text: textBinding)
+            .font(.system(size: annotation.fontSize, weight: .bold))
+            .foregroundStyle(annotation.color)
+            .textFieldStyle(.plain)
+            .fixedSize()
+            .padding(.horizontal, RenderConstants.textPaddingH)
+            .padding(.vertical, RenderConstants.textPaddingV)
+            .focused($focusedTextId, equals: annotationId)
+            .offset(x: annotation.position.x, y: annotation.position.y)
+            .onAppear { focusedTextId = annotationId }
+            .onSubmit {
+                commitTextEditing(id: annotationId)
+                focusedTextId = nil
+            }
+            .onExitCommand {
+                cancelTextEditing(id: annotationId)
+            }
+    }
+
+    // MARK: - Drag Handling
+
+    private func handleDragChanged(_ value: DragGesture.Value) {
+        let point = value.location
+        let translation = value.translation
+
+        switch dragOperation {
+        case .none:
+            // First drag event — determine what we're doing
+            let startPoint = value.startLocation
+
+            if selectedTool == .arrow {
+                dragOperation = .creatingArrow(start: startPoint, end: point)
+                return
+            }
+
+            if let hit = hitTestAnnotations(
+                at: startPoint, arrows: arrows, texts: texts,
+                selectedId: selectedAnnotationId, textSizes: textSizes
+            ) {
+                switch hit {
+                case .arrow(let id, let zone):
+                    selectedAnnotationId = id
+                    if let arrow = arrows.first(where: { $0.id == id }) {
+                        switch zone {
+                        case .startEndpoint:
+                            dragOperation = .movingArrowStart(id: id, initialStart: arrow.start)
+                        case .endEndpoint:
+                            dragOperation = .movingArrowEnd(id: id, initialEnd: arrow.end)
+                        case .body:
+                            dragOperation = .movingArrow(
+                                id: id, initialStart: arrow.start, initialEnd: arrow.end
+                            )
+                        default: break
+                        }
+                    }
+                case .text(let id, let zone):
+                    selectedAnnotationId = id
+                    if let annotation = texts.first(where: { $0.id == id }) {
+                        switch zone {
+                        case .resizeHandle:
+                            dragOperation = .resizingText(id: id, initialFontSize: annotation.fontSize)
+                        case .body:
+                            dragOperation = .movingText(id: id, initialPosition: annotation.position)
+                        default: break
+                        }
+                    }
+                }
+            }
+
+        case .creatingArrow(let start, _):
+            dragOperation = .creatingArrow(start: start, end: point)
+
+        case .movingArrow(let id, let initialStart, let initialEnd):
+            if let index = arrows.firstIndex(where: { $0.id == id }) {
+                arrows[index].start = CGPoint(
+                    x: initialStart.x + translation.width,
+                    y: initialStart.y + translation.height
+                )
+                arrows[index].end = CGPoint(
+                    x: initialEnd.x + translation.width,
+                    y: initialEnd.y + translation.height
+                )
+            }
+
+        case .movingArrowStart(let id, let initial):
+            if let index = arrows.firstIndex(where: { $0.id == id }) {
+                arrows[index].start = CGPoint(
+                    x: initial.x + translation.width,
+                    y: initial.y + translation.height
+                )
+            }
+
+        case .movingArrowEnd(let id, let initial):
+            if let index = arrows.firstIndex(where: { $0.id == id }) {
+                arrows[index].end = CGPoint(
+                    x: initial.x + translation.width,
+                    y: initial.y + translation.height
+                )
+            }
+
+        case .movingText(let id, let initial):
+            if let index = texts.firstIndex(where: { $0.id == id }) {
+                texts[index].position = CGPoint(
+                    x: initial.x + translation.width,
+                    y: initial.y + translation.height
+                )
+            }
+
+        case .resizingText(let id, let initialFontSize):
+            if let index = texts.firstIndex(where: { $0.id == id }) {
+                let diagonal = translation.width + translation.height
+                let scaleFactor = 1.0 + diagonal / 150.0
+                texts[index].fontSize = min(200, max(8, initialFontSize * scaleFactor))
+            }
+        }
+    }
+
+    private func handleDragEnded(_ value: DragGesture.Value) {
+        if case .creatingArrow(let start, _) = dragOperation {
+            let end = value.location
+            let arrow = ArrowAnnotation(start: start, end: end, color: selectedColor)
+            arrows.append(arrow)
+            selectedTool = nil
+        }
+        dragOperation = .none
+    }
+
+    // MARK: - Tap Handling
+
+    private func handleTap(at location: CGPoint) {
+        // Double-tap detection
+        let now = Date()
+        if let lastTime = lastTapTime,
+           let lastLoc = lastTapLocation,
+           now.timeIntervalSince(lastTime) < NSEvent.doubleClickInterval,
+           hypot(location.x - lastLoc.x, location.y - lastLoc.y) < 10 {
+            // Double tap
+            lastTapTime = nil
+            lastTapLocation = nil
+            handleDoubleTap(at: location)
+            return
+        }
+        lastTapTime = now
+        lastTapLocation = location
+
+        // Single tap
+        if selectedTool == .text {
+            createTextAnnotation(at: location)
+            return
+        }
+
+        if let hit = hitTestAnnotations(
+            at: location, arrows: arrows, texts: texts,
+            selectedId: selectedAnnotationId, textSizes: textSizes
+        ) {
+            switch hit {
+            case .arrow(let id, _): selectedAnnotationId = id
+            case .text(let id, _): selectedAnnotationId = id
+            }
+        } else {
+            selectedAnnotationId = nil
+        }
+    }
+
+    private func handleDoubleTap(at location: CGPoint) {
+        if let hit = hitTestAnnotations(
+            at: location, arrows: arrows, texts: texts,
+            selectedId: selectedAnnotationId, textSizes: textSizes
+        ) {
+            if case .text(let id, _) = hit {
+                startEditing(id: id)
+            }
+        }
+    }
+
+    // MARK: - Text Editing
+
+    private func createTextAnnotation(at location: CGPoint) {
+        if let editingId = editingTextId {
+            commitTextEditing(id: editingId)
+            focusedTextId = nil
+        }
+
+        let annotation = TextAnnotation(
+            position: location,
+            text: "",
+            color: selectedColor,
+            isEditing: true
+        )
+        texts.append(annotation)
+        editingOriginalText = ""
+        editingTextId = annotation.id
+        focusedTextId = annotation.id
+        selectedAnnotationId = annotation.id
+        selectedTool = nil
+    }
+
+    private func startEditing(id: UUID) {
+        guard let annotation = texts.first(where: { $0.id == id }) else { return }
+        editingOriginalText = annotation.text
+        editingTextId = id
+        selectedAnnotationId = id
+        if let index = texts.firstIndex(where: { $0.id == id }) {
+            texts[index].isEditing = true
         }
     }
 
@@ -97,366 +416,27 @@ struct AnnotationCanvas: View {
         focusedTextId = nil
     }
 
-    // MARK: - Annotations Overlay
+    // MARK: - Helpers
 
-    @ViewBuilder
-    private var annotationsOverlay: some View {
-        ForEach(Array(arrows.enumerated()), id: \.element.id) { index, arrow in
-            DraggableArrowView(
-                arrow: arrow,
-                isSelected: selectedAnnotationId == arrow.id,
-                onSelect: { selectedAnnotationId = arrow.id },
-                onMove: { newStart, newEnd in
-                    arrows[index].start = newStart
-                    arrows[index].end = newEnd
-                }
-            )
-        }
-
-        ForEach(texts) { annotation in
-            textAnnotationView(for: annotation)
-        }
+    /// Returns the current arrow points accounting for in-progress drag operations.
+    private func currentArrowPoints(for arrow: ArrowAnnotation) -> (start: CGPoint, end: CGPoint) {
+        (arrow.start, arrow.end)
     }
 
-    // MARK: - Text Annotation Views
-
-    private func bindingForText(id: UUID) -> Binding<TextAnnotation> {
-        Binding(
-            get: {
-                texts.first(where: { $0.id == id })
-                    ?? TextAnnotation(position: .zero, text: "", color: .clear)
-            },
-            set: { newValue in
-                if let index = texts.firstIndex(where: { $0.id == id }) {
-                    texts[index] = newValue
-                }
-            }
-        )
-    }
-
-    @ViewBuilder
-    private func textAnnotationView(for annotation: TextAnnotation) -> some View {
-        let annotationId = annotation.id
-        if editingTextId == annotationId {
-            let textBinding = Binding<String>(
-                get: { texts.first(where: { $0.id == annotationId })?.text ?? "" },
-                set: { newValue in
-                    if let index = texts.firstIndex(where: { $0.id == annotationId }) {
-                        texts[index].text = newValue
-                    }
-                }
-            )
-            TextField("", text: textBinding)
-                .font(.system(size: annotation.fontSize, weight: .bold))
-                .foregroundStyle(annotation.color)
-                .textFieldStyle(.plain)
-                .fixedSize()
-                .padding(.horizontal, 4)
-                .padding(.vertical, 2)
-                .focused($focusedTextId, equals: annotationId)
-                .offset(x: annotation.position.x,
-                        y: annotation.position.y)
-                .onAppear {
-                    focusedTextId = annotationId
-                }
-                .onSubmit {
-                    commitTextEditing(id: annotationId)
-                    focusedTextId = nil
-                }
-                .onExitCommand {
-                    cancelTextEditing(id: annotationId)
-                }
-        } else {
-            DraggableTextView(
-                annotation: bindingForText(id: annotationId),
-                selectedTool: selectedTool,
-                isSelected: selectedAnnotationId == annotationId,
-                onSelect: { selectedAnnotationId = annotationId },
-                onStartEditing: {
-                    editingOriginalText = annotation.text
-                    editingTextId = annotationId
-                    selectedAnnotationId = annotationId
-                    if let index = texts.firstIndex(where: { $0.id == annotationId }) {
-                        texts[index].isEditing = true
-                    }
-                }
-            )
-        }
-    }
-
-    // MARK: - Interaction Layer (for creating new annotations)
-
-    private var interactionLayer: some View {
-        Color.clear
-            .contentShape(Rectangle())
-            .frame(width: imageSize.width, height: imageSize.height)
-            .gesture(
-                DragGesture(minimumDistance: 5)
-                    .onChanged { value in
-                        guard selectedTool == .arrow else { return }
-                        if dragStart == nil {
-                            dragStart = value.startLocation
-                        }
-                        dragEnd = value.location
-                    }
-                    .onEnded { value in
-                        guard selectedTool == .arrow else { return }
-                        if let start = dragStart {
-                            let arrow = ArrowAnnotation(
-                                start: start,
-                                end: value.location,
-                                color: selectedColor
-                            )
-                            arrows.append(arrow)
-                            selectedTool = nil
-                        }
-                        dragStart = nil
-                        dragEnd = nil
-                    }
-            )
-            .simultaneousGesture(
-                SpatialTapGesture()
-                    .onEnded { value in
-                        selectedAnnotationId = nil
-                        handleTap(at: value.location)
-                    }
-            )
-            .allowsHitTesting(editingTextId == nil)
-    }
-
-    private func handleTap(at location: CGPoint) {
-        if selectedTool == .text {
-            if let editingId = editingTextId {
-                commitTextEditing(id: editingId)
-                focusedTextId = nil
-            }
-
-            let annotation = TextAnnotation(
-                position: location,
-                text: "",
-                color: selectedColor,
-                isEditing: true
-            )
-            texts.append(annotation)
-            editingOriginalText = ""
-            editingTextId = annotation.id
-            focusedTextId = annotation.id
-            selectedTool = nil
-        }
+    /// Returns the current text state accounting for in-progress drag operations.
+    private func currentTextState(for annotation: TextAnnotation) -> (position: CGPoint, fontSize: CGFloat) {
+        (annotation.position, annotation.fontSize)
     }
 }
 
-// MARK: - Draggable Arrow View
+// MARK: - Drag Operation
 
-struct DraggableArrowView: View {
-    let arrow: ArrowAnnotation
-    let isSelected: Bool
-    let onSelect: () -> Void
-    let onMove: (CGPoint, CGPoint) -> Void
-
-    @State private var bodyOffset: CGSize = .zero
-    @State private var startOffset: CGSize = .zero
-    @State private var endOffset: CGSize = .zero
-
-    private var currentStart: CGPoint {
-        CGPoint(
-            x: arrow.start.x + bodyOffset.width + startOffset.width,
-            y: arrow.start.y + bodyOffset.height + startOffset.height
-        )
-    }
-
-    private var currentEnd: CGPoint {
-        CGPoint(
-            x: arrow.end.x + bodyOffset.width + endOffset.width,
-            y: arrow.end.y + bodyOffset.height + endOffset.height
-        )
-    }
-
-    private static let handleSize: CGFloat = 10
-    private static let handleHitSize: CGFloat = 24
-
-    var body: some View {
-        ZStack {
-            // Selection highlight behind the arrow
-            if isSelected {
-                ArrowShape(start: currentStart, end: currentEnd)
-                    .stroke(Color.accentColor.opacity(0.4), lineWidth: arrow.lineWidth + 8)
-            }
-
-            // Visible arrow
-            ArrowShape(start: currentStart, end: currentEnd)
-                .stroke(arrow.color, lineWidth: arrow.lineWidth)
-
-            // Wide invisible hit area for selecting and dragging the whole arrow
-            ArrowShape(start: currentStart, end: currentEnd)
-                .stroke(Color.white.opacity(0.001), lineWidth: 20)
-                .contentShape(
-                    ArrowShape(start: currentStart, end: currentEnd)
-                        .stroke(style: StrokeStyle(lineWidth: 20))
-                )
-                .onTapGesture { onSelect() }
-                .gesture(
-                    DragGesture(minimumDistance: 3)
-                        .onChanged { value in
-                            bodyOffset = value.translation
-                            onSelect()
-                        }
-                        .onEnded { _ in
-                            onMove(currentStart, currentEnd)
-                            bodyOffset = .zero
-                        }
-                )
-
-            // Endpoint handles (only when selected)
-            if isSelected {
-                endpointHandle(at: currentStart)
-                    .gesture(
-                        DragGesture(minimumDistance: 1)
-                            .onChanged { value in
-                                startOffset = value.translation
-                            }
-                            .onEnded { _ in
-                                onMove(currentStart, currentEnd)
-                                startOffset = .zero
-                            }
-                    )
-
-                endpointHandle(at: currentEnd)
-                    .gesture(
-                        DragGesture(minimumDistance: 1)
-                            .onChanged { value in
-                                endOffset = value.translation
-                            }
-                            .onEnded { _ in
-                                onMove(currentStart, currentEnd)
-                                endOffset = .zero
-                            }
-                    )
-            }
-        }
-    }
-
-    private func endpointHandle(at point: CGPoint) -> some View {
-        Circle()
-            .fill(Color.white)
-            .stroke(Color.accentColor, lineWidth: 2)
-            .frame(width: Self.handleSize, height: Self.handleSize)
-            .contentShape(Circle().scale(Self.handleHitSize / Self.handleSize))
-            .position(point)
-    }
-}
-
-// MARK: - Draggable Text View
-
-struct DraggableTextView: View {
-    @Binding var annotation: TextAnnotation
-    let selectedTool: AnnotationTool?
-    let isSelected: Bool
-    let onSelect: () -> Void
-    let onStartEditing: () -> Void
-
-    @State private var dragOffset: CGSize = .zero
-    @State private var lastTapTime: Date?
-    @State private var resizeStartFontSize: CGFloat?
-
-    private var currentPosition: CGPoint {
-        CGPoint(
-            x: annotation.position.x + dragOffset.width,
-            y: annotation.position.y + dragOffset.height
-        )
-    }
-
-    private static let handleSize: CGFloat = 10
-    private static let handleHitSize: CGFloat = 24
-
-    var body: some View {
-        Text(annotation.text.isEmpty ? " " : annotation.text)
-            .font(.system(size: annotation.fontSize, weight: .bold))
-            .foregroundStyle(annotation.color)
-            .fixedSize()
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color.accentColor, lineWidth: 2)
-                    .opacity(isSelected ? 1 : 0)
-            )
-            .overlay(alignment: .bottomTrailing) {
-                if isSelected {
-                    resizeHandle
-                }
-            }
-            .shadow(color: .black.opacity(0.5), radius: 1, x: 1, y: 1)
-            .offset(x: currentPosition.x, y: currentPosition.y)
-            .gesture(
-                DragGesture(minimumDistance: 3)
-                    .onChanged { value in
-                        dragOffset = value.translation
-                        onSelect()
-                    }
-                    .onEnded { value in
-                        annotation.position = currentPosition
-                        dragOffset = .zero
-                    }
-            )
-            .onTapGesture {
-                onSelect()
-                let now = Date()
-                if let last = lastTapTime,
-                   now.timeIntervalSince(last) < NSEvent.doubleClickInterval {
-                    lastTapTime = nil
-                    DispatchQueue.main.async {
-                        onStartEditing()
-                    }
-                } else {
-                    lastTapTime = now
-                }
-            }
-    }
-
-    private var resizeHandle: some View {
-        Circle()
-            .fill(Color.white)
-            .stroke(Color.accentColor, lineWidth: 2)
-            .frame(width: Self.handleSize, height: Self.handleSize)
-            .contentShape(Circle().scale(Self.handleHitSize / Self.handleSize))
-            .offset(x: Self.handleSize / 2, y: Self.handleSize / 2)
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        if resizeStartFontSize == nil {
-                            resizeStartFontSize = annotation.fontSize
-                        }
-                        let startSize = resizeStartFontSize!
-                        let diagonal = value.translation.width + value.translation.height
-                        let scale = 1.0 + diagonal / 150.0
-                        annotation.fontSize = min(200, max(8, startSize * scale))
-                    }
-                    .onEnded { _ in
-                        resizeStartFontSize = nil
-                    }
-            )
-    }
-}
-
-// MARK: - Arrow Shape
-
-struct ArrowShape: Shape {
-    var start: CGPoint
-    var end: CGPoint
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-
-        path.move(to: start)
-        path.addLine(to: end)
-
-        if let wings = arrowHeadWings(tip: end, tail: start) {
-            path.move(to: wings.left)
-            path.addLine(to: end)
-            path.addLine(to: wings.right)
-        }
-
-        return path
-    }
+enum DragOperation {
+    case none
+    case creatingArrow(start: CGPoint, end: CGPoint)
+    case movingArrow(id: UUID, initialStart: CGPoint, initialEnd: CGPoint)
+    case movingArrowStart(id: UUID, initialStart: CGPoint)
+    case movingArrowEnd(id: UUID, initialEnd: CGPoint)
+    case movingText(id: UUID, initialPosition: CGPoint)
+    case resizingText(id: UUID, initialFontSize: CGFloat)
 }
