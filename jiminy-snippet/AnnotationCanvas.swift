@@ -252,16 +252,26 @@ struct DraggableArrowView: View {
     let onSelect: () -> Void
     let onMove: (CGPoint, CGPoint) -> Void
 
-    @State private var dragOffset: CGSize = .zero
-    @State private var isDragging = false
+    @State private var bodyOffset: CGSize = .zero
+    @State private var startOffset: CGSize = .zero
+    @State private var endOffset: CGSize = .zero
 
     private var currentStart: CGPoint {
-        CGPoint(x: arrow.start.x + dragOffset.width, y: arrow.start.y + dragOffset.height)
+        CGPoint(
+            x: arrow.start.x + bodyOffset.width + startOffset.width,
+            y: arrow.start.y + bodyOffset.height + startOffset.height
+        )
     }
 
     private var currentEnd: CGPoint {
-        CGPoint(x: arrow.end.x + dragOffset.width, y: arrow.end.y + dragOffset.height)
+        CGPoint(
+            x: arrow.end.x + bodyOffset.width + endOffset.width,
+            y: arrow.end.y + bodyOffset.height + endOffset.height
+        )
     }
+
+    private static let handleSize: CGFloat = 10
+    private static let handleHitSize: CGFloat = 24
 
     var body: some View {
         ZStack {
@@ -275,30 +285,62 @@ struct DraggableArrowView: View {
             ArrowShape(start: currentStart, end: currentEnd)
                 .stroke(arrow.color, lineWidth: arrow.lineWidth)
 
-            // Wide invisible hit area for dragging
+            // Wide invisible hit area for selecting and dragging the whole arrow
             ArrowShape(start: currentStart, end: currentEnd)
                 .stroke(Color.white.opacity(0.001), lineWidth: 20)
+                .contentShape(
+                    ArrowShape(start: currentStart, end: currentEnd)
+                        .stroke(style: StrokeStyle(lineWidth: 20))
+                )
+                .onTapGesture { onSelect() }
+                .gesture(
+                    DragGesture(minimumDistance: 3)
+                        .onChanged { value in
+                            bodyOffset = value.translation
+                            onSelect()
+                        }
+                        .onEnded { _ in
+                            onMove(currentStart, currentEnd)
+                            bodyOffset = .zero
+                        }
+                )
+
+            // Endpoint handles (only when selected)
+            if isSelected {
+                endpointHandle(at: currentStart)
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                startOffset = value.translation
+                            }
+                            .onEnded { _ in
+                                onMove(currentStart, currentEnd)
+                                startOffset = .zero
+                            }
+                    )
+
+                endpointHandle(at: currentEnd)
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                endOffset = value.translation
+                            }
+                            .onEnded { _ in
+                                onMove(currentStart, currentEnd)
+                                endOffset = .zero
+                            }
+                    )
+            }
         }
-        .contentShape(
-            ArrowShape(start: currentStart, end: currentEnd)
-                .stroke(style: StrokeStyle(lineWidth: 20))
-        )
-        .onTapGesture {
-            onSelect()
-        }
-        .gesture(
-            DragGesture(minimumDistance: 3)
-                .onChanged { value in
-                    isDragging = true
-                    dragOffset = value.translation
-                    onSelect()
-                }
-                .onEnded { value in
-                    onMove(currentStart, currentEnd)
-                    dragOffset = .zero
-                    isDragging = false
-                }
-        )
+    }
+
+    private func endpointHandle(at point: CGPoint) -> some View {
+        Circle()
+            .fill(Color.white)
+            .stroke(Color.accentColor, lineWidth: 2)
+            .frame(width: Self.handleSize, height: Self.handleSize)
+            .contentShape(Circle().scale(Self.handleHitSize / Self.handleSize))
+            .position(point)
     }
 }
 
