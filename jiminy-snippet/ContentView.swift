@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var texts: [TextAnnotation] = []
     @State private var selectedAnnotationId: UUID? = nil
     @State private var keyMonitor: Any?
+    @State private var scaleText: String = "100"
 
     private let scaleStep: CGFloat = 0.25
     private let minScale: CGFloat = 0.25
@@ -197,6 +198,8 @@ struct ContentView: View {
         }
     }
 
+    private static let scalePresets: [CGFloat] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]
+
     private var scaleControls: some View {
         HStack(spacing: 4) {
             Button {
@@ -206,9 +209,43 @@ struct ContentView: View {
             }
             .disabled(scale <= minScale)
 
-            Text("\(Int(scale * 100))%")
-                .frame(width: 48)
-                .monospacedDigit()
+            HStack(spacing: 0) {
+                TextField("", text: $scaleText)
+                    .monospacedDigit()
+                    .frame(width: 40)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.plain)
+                    .onSubmit { applyScaleText() }
+
+                Text("%")
+                    .foregroundStyle(.secondary)
+
+                Menu {
+                    Button("Fit") { zoomToFit() }
+                    Divider()
+                    ForEach(Self.scalePresets, id: \.self) { preset in
+                        Button("\(Int(preset * 100))%") {
+                            scale = preset
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+            .onChange(of: scale) {
+                scaleText = "\(Int(scale * 100))"
+            }
 
             Button {
                 scale = min(maxScale, scale + scaleStep)
@@ -307,6 +344,14 @@ struct ContentView: View {
         if ImageExporter.save(image: rendered, to: url) {
             screenshotManager.hasUnsavedChanges = false
         }
+    }
+
+    private func applyScaleText() {
+        let cleaned = scaleText.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "%", with: "")
+        if let value = Double(cleaned) {
+            scale = clamp(CGFloat(value) / 100.0, min: minScale, max: maxScale)
+        }
+        scaleText = "\(Int(scale * 100))"
     }
 
     private func zoomToFit() {
