@@ -48,16 +48,13 @@ enum AnnotationRenderer {
         let resolved = context.resolve(text)
         let size = resolved.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity))
 
-        // Shadow
-        var shadowContext = context
-        shadowContext.opacity = 0.5
-        shadowContext.addFilter(.shadow(color: .black, radius: 1, x: 1, y: 1))
-
-        let origin = CGPoint(
-            x: annotation.position.x + RenderConstants.textPaddingH,
-            y: annotation.position.y + RenderConstants.textPaddingV
-        )
-        context.draw(resolved, in: CGRect(origin: origin, size: size))
+        context.drawLayer { ctx in
+            ctx.translateBy(x: annotation.position.x, y: annotation.position.y)
+            ctx.rotate(by: .degrees(annotation.rotation))
+            ctx.addFilter(.shadow(color: .black.opacity(0.5), radius: 1, x: 1, y: 1))
+            let origin = CGPoint(x: RenderConstants.textPaddingH, y: RenderConstants.textPaddingV)
+            ctx.draw(resolved, in: CGRect(origin: origin, size: size))
+        }
     }
 
     static func drawTextSelection(
@@ -65,13 +62,19 @@ enum AnnotationRenderer {
         size: CGSize,
         in context: inout GraphicsContext
     ) {
-        let rect = textBoundingRect(for: annotation, measuredSize: size)
-        let path = Path(roundedRect: rect, cornerRadius: 4)
-        context.stroke(
-            path,
-            with: .color(.accentColor),
-            lineWidth: 2
+        let localRect = CGRect(
+            origin: .zero,
+            size: CGSize(
+                width: size.width + RenderConstants.textPaddingH * 2,
+                height: size.height + RenderConstants.textPaddingV * 2
+            )
         )
+        context.drawLayer { ctx in
+            ctx.translateBy(x: annotation.position.x, y: annotation.position.y)
+            ctx.rotate(by: .degrees(annotation.rotation))
+            let path = Path(roundedRect: localRect, cornerRadius: 4)
+            ctx.stroke(path, with: .color(.accentColor), lineWidth: 2)
+        }
     }
 
     // MARK: - Handles
@@ -125,12 +128,21 @@ enum AnnotationRenderer {
         )
     }
 
-    /// Bottom-trailing corner point for the resize handle.
+    /// Bottom-trailing corner point for the resize handle, in canvas coordinates.
     static func resizeHandlePoint(for annotation: TextAnnotation, measuredSize: CGSize) -> CGPoint {
-        let rect = textBoundingRect(for: annotation, measuredSize: measuredSize)
+        let localX = measuredSize.width + RenderConstants.textPaddingH * 2 + RenderConstants.handleSize / 2
+        let localY = measuredSize.height + RenderConstants.textPaddingV * 2 + RenderConstants.handleSize / 2
+        return rotateLocalPoint(CGPoint(x: localX, y: localY), around: annotation.position, angle: annotation.rotation)
+    }
+
+    /// Transforms a point from a text annotation's local coordinate space to canvas coordinates.
+    static func rotateLocalPoint(_ local: CGPoint, around origin: CGPoint, angle: Double) -> CGPoint {
+        let rad = angle * .pi / 180
+        let cosA = cos(rad)
+        let sinA = sin(rad)
         return CGPoint(
-            x: rect.maxX + RenderConstants.handleSize / 2,
-            y: rect.maxY + RenderConstants.handleSize / 2
+            x: origin.x + local.x * cosA - local.y * sinA,
+            y: origin.y + local.x * sinA + local.y * cosA
         )
     }
 

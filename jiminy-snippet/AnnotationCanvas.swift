@@ -15,7 +15,6 @@ struct AnnotationCanvas: View {
     @Binding var selectedAnnotationId: UUID?
     let selectedColor: Color
     let scale: CGFloat
-    let rotation: Double
 
     // MARK: - Gesture State
 
@@ -34,14 +33,6 @@ struct AnnotationCanvas: View {
             sizes[annotation.id] = AnnotationRenderer.measureText(annotation)
         }
         return sizes
-    }
-
-    private var rotatedImageSize: CGSize {
-        let normalized = ((Int(rotation) % 360) + 360) % 360
-        let isRotated90 = normalized == 90 || normalized == 270
-        return isRotated90
-            ? CGSize(width: imageSize.height, height: imageSize.width)
-            : imageSize
     }
 
     var body: some View {
@@ -75,10 +66,9 @@ struct AnnotationCanvas: View {
                 }
                 .frame(width: imageSize.width, height: imageSize.height)
                 .scaleEffect(scale)
-                .rotationEffect(.degrees(rotation))
                 .frame(
-                    width: rotatedImageSize.width * scale,
-                    height: rotatedImageSize.height * scale
+                    width: imageSize.width * scale,
+                    height: imageSize.height * scale
                 )
             }
             .background(Color(nsColor: .windowBackgroundColor))
@@ -118,7 +108,8 @@ struct AnnotationCanvas: View {
                 let current = currentTextState(for: annotation)
                 let displayAnnotation = TextAnnotation(
                     position: current.position, text: annotation.text,
-                    color: annotation.color, fontSize: current.fontSize
+                    color: annotation.color, fontSize: current.fontSize,
+                    rotation: annotation.rotation
                 )
 
                 let size = AnnotationRenderer.measureText(displayAnnotation, in: context)
@@ -191,6 +182,7 @@ struct AnnotationCanvas: View {
             .padding(.horizontal, RenderConstants.textPaddingH)
             .padding(.vertical, RenderConstants.textPaddingV)
             .focused($focusedTextId, equals: annotationId)
+            .rotationEffect(.degrees(annotation.rotation), anchor: .topLeading)
             .offset(x: annotation.position.x, y: annotation.position.y)
             .onAppear { focusedTextId = annotationId }
             .onSubmit {

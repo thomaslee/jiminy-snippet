@@ -14,7 +14,6 @@ struct ContentView: View {
     @State private var selectedTool: AnnotationTool? = nil
     @State private var selectedColorIndex: Int = 0
     @State private var scale: CGFloat = 1.0
-    @State private var rotation: Double = 0
     @State private var canvasSize: CGSize = .zero
 
     @State private var arrows: [ArrowAnnotation] = []
@@ -47,8 +46,7 @@ struct ContentView: View {
                     selectedTool: $selectedTool,
                     selectedAnnotationId: $selectedAnnotationId,
                     selectedColor: selectedColor,
-                    scale: scale,
-                    rotation: rotation
+                    scale: scale
                 )
                 .onGeometryChange(for: CGSize.self) { proxy in
                     proxy.size
@@ -66,7 +64,6 @@ struct ContentView: View {
         .frame(minWidth: 800, minHeight: 600)
         .onChange(of: arrows) { markUnsaved() }
         .onChange(of: texts) { markUnsaved() }
-        .onChange(of: rotation) { markUnsaved() }
         .onChange(of: screenshotManager.capturedImage) {
             markUnsaved()
             zoomToFit()
@@ -259,18 +256,14 @@ struct ContentView: View {
     private var rotateControls: some View {
         HStack(spacing: 4) {
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    rotation -= 90
-                }
+                rotateImageAndAnnotations(clockwise: false)
             } label: {
                 Image(systemName: "rotate.left")
             }
             .help("Rotate counter-clockwise")
 
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    rotation += 90
-                }
+                rotateImageAndAnnotations(clockwise: true)
             } label: {
                 Image(systemName: "rotate.right")
             }
@@ -330,7 +323,6 @@ struct ContentView: View {
             image: image,
             arrows: arrows,
             texts: texts,
-            rotation: rotation,
             includeAnnotations: includeAnnotations
         ) else { return }
 
@@ -367,6 +359,35 @@ struct ContentView: View {
 
     private func clamp(_ value: CGFloat, min lo: CGFloat, max hi: CGFloat) -> CGFloat {
         Swift.min(hi, Swift.max(lo, value))
+    }
+
+    private func rotateImageAndAnnotations(clockwise: Bool) {
+        guard let image = screenshotManager.capturedImage else { return }
+        let w = image.size.width
+        let h = image.size.height
+
+        screenshotManager.capturedImage = screenshotManager.rotateImage(image, clockwise: clockwise)
+
+        for i in arrows.indices {
+            arrows[i].start = rotatePoint(arrows[i].start, imageWidth: w, imageHeight: h, clockwise: clockwise)
+            arrows[i].end = rotatePoint(arrows[i].end, imageWidth: w, imageHeight: h, clockwise: clockwise)
+        }
+        for i in texts.indices {
+            texts[i].position = rotatePoint(texts[i].position, imageWidth: w, imageHeight: h, clockwise: clockwise)
+            texts[i].rotation += clockwise ? 90 : -90
+        }
+
+        selectedAnnotationId = nil
+        zoomToFit()
+        markUnsaved()
+    }
+
+    private func rotatePoint(_ point: CGPoint, imageWidth w: CGFloat, imageHeight h: CGFloat, clockwise: Bool) -> CGPoint {
+        if clockwise {
+            return CGPoint(x: h - point.y, y: point.x)
+        } else {
+            return CGPoint(x: point.y, y: w - point.x)
+        }
     }
 
     private func markUnsaved() {

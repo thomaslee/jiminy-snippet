@@ -34,17 +34,29 @@ func hitTestAnnotations(
     for annotation in texts.reversed() {
         guard let size = textSizes[annotation.id] else { continue }
 
+        // Transform point into text's local coordinate space
+        let localPoint = toLocalTextSpace(point, annotation: annotation)
+        let localRect = CGRect(
+            origin: .zero,
+            size: CGSize(
+                width: size.width + RenderConstants.textPaddingH * 2,
+                height: size.height + RenderConstants.textPaddingV * 2
+            )
+        )
+
         // Check resize handle first (only if selected)
         if annotation.id == selectedId {
-            let handlePoint = AnnotationRenderer.resizeHandlePoint(for: annotation, measuredSize: size)
-            if distance(point, handlePoint) < RenderConstants.handleHitRadius {
+            let localHandle = CGPoint(
+                x: localRect.maxX + RenderConstants.handleSize / 2,
+                y: localRect.maxY + RenderConstants.handleSize / 2
+            )
+            if distance(localPoint, localHandle) < RenderConstants.handleHitRadius {
                 return .text(id: annotation.id, zone: .resizeHandle)
             }
         }
 
         // Check body
-        let rect = AnnotationRenderer.textBoundingRect(for: annotation, measuredSize: size)
-        if rect.contains(point) {
+        if localRect.contains(localPoint) {
             return .text(id: annotation.id, zone: .body)
         }
     }
@@ -75,6 +87,16 @@ func hitTestAnnotations(
 
 private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
     hypot(a.x - b.x, a.y - b.y)
+}
+
+/// Transforms a canvas point into a text annotation's local (unrotated) coordinate space.
+private func toLocalTextSpace(_ point: CGPoint, annotation: TextAnnotation) -> CGPoint {
+    let dx = point.x - annotation.position.x
+    let dy = point.y - annotation.position.y
+    let rad = -annotation.rotation * .pi / 180
+    let cosA = cos(rad)
+    let sinA = sin(rad)
+    return CGPoint(x: dx * cosA - dy * sinA, y: dx * sinA + dy * cosA)
 }
 
 /// Perpendicular distance from `point` to the line segment from `segStart` to `segEnd`.

@@ -57,6 +57,7 @@ struct TextAnnotation: Identifiable, Equatable {
     var text: String
     var color: Color
     var fontSize: CGFloat = 24
+    var rotation: Double = 0
     var isEditing: Bool = false
 }
 
