@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var selectedColorIndex: Int = 0
     @State private var scale: CGFloat = 1.0
     @State private var rotation: Double = 0
+    @State private var canvasSize: CGSize = .zero
 
     @State private var arrows: [ArrowAnnotation] = []
     @State private var texts: [TextAnnotation] = []
@@ -48,6 +49,15 @@ struct ContentView: View {
                     scale: scale,
                     rotation: rotation
                 )
+                .onGeometryChange(for: CGSize.self) { proxy in
+                    proxy.size
+                } action: { newSize in
+                    let wasZero = canvasSize == .zero
+                    canvasSize = newSize
+                    if wasZero {
+                        zoomToFit()
+                    }
+                }
             } else {
                 emptyState
             }
@@ -55,7 +65,10 @@ struct ContentView: View {
         .frame(minWidth: 800, minHeight: 600)
         .onChange(of: arrows) { markUnsaved() }
         .onChange(of: texts) { markUnsaved() }
-        .onChange(of: screenshotManager.capturedImage) { markUnsaved() }
+        .onChange(of: screenshotManager.capturedImage) {
+            markUnsaved()
+            zoomToFit()
+        }
         .onChange(of: rotation) { markUnsaved() }
         .onAppear {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -294,6 +307,21 @@ struct ContentView: View {
         if ImageExporter.save(image: rendered, to: url) {
             screenshotManager.hasUnsavedChanges = false
         }
+    }
+
+    private func zoomToFit() {
+        guard let image = screenshotManager.capturedImage else { return }
+        let availableSize = canvasSize
+        guard availableSize.width > 0, availableSize.height > 0 else { return }
+
+        let imageSize = image.size
+        let scaleX = availableSize.width / imageSize.width
+        let scaleY = availableSize.height / imageSize.height
+        scale = clamp(min(scaleX, scaleY), min: minScale, max: maxScale)
+    }
+
+    private func clamp(_ value: CGFloat, min lo: CGFloat, max hi: CGFloat) -> CGFloat {
+        Swift.min(hi, Swift.max(lo, value))
     }
 
     private func markUnsaved() {
