@@ -27,6 +27,15 @@ struct AnnotationCanvas: View {
         image.size
     }
 
+    /// Image size after rotation, used for scroll view content sizing.
+    private var rotatedImageSize: CGSize {
+        let normalizedRotation = ((Int(rotation) % 360) + 360) % 360
+        let isRotated90 = normalizedRotation == 90 || normalizedRotation == 270
+        return isRotated90
+            ? CGSize(width: imageSize.height, height: imageSize.width)
+            : imageSize
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ScrollView([.horizontal, .vertical]) {
@@ -65,8 +74,8 @@ struct AnnotationCanvas: View {
                 .scaleEffect(scale)
                 .rotationEffect(.degrees(rotation))
                 .frame(
-                    width: imageSize.width * scale,
-                    height: imageSize.height * scale
+                    width: rotatedImageSize.width * scale,
+                    height: rotatedImageSize.height * scale
                 )
             }
             .background(Color(nsColor: .windowBackgroundColor))
