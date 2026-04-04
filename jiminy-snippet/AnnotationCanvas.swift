@@ -355,6 +355,7 @@ struct DraggableTextView: View {
 
     @State private var dragOffset: CGSize = .zero
     @State private var lastTapTime: Date?
+    @State private var resizeStartFontSize: CGFloat?
 
     private var currentPosition: CGPoint {
         CGPoint(
@@ -362,6 +363,9 @@ struct DraggableTextView: View {
             y: annotation.position.y + dragOffset.height
         )
     }
+
+    private static let handleSize: CGFloat = 10
+    private static let handleHitSize: CGFloat = 24
 
     var body: some View {
         Text(annotation.text.isEmpty ? " " : annotation.text)
@@ -375,8 +379,13 @@ struct DraggableTextView: View {
                     .stroke(Color.accentColor, lineWidth: 2)
                     .opacity(isSelected ? 1 : 0)
             )
-            .offset(x: currentPosition.x, y: currentPosition.y)
+            .overlay(alignment: .bottomTrailing) {
+                if isSelected {
+                    resizeHandle
+                }
+            }
             .shadow(color: .black.opacity(0.5), radius: 1, x: 1, y: 1)
+            .offset(x: currentPosition.x, y: currentPosition.y)
             .gesture(
                 DragGesture(minimumDistance: 3)
                     .onChanged { value in
@@ -401,6 +410,30 @@ struct DraggableTextView: View {
                     lastTapTime = now
                 }
             }
+    }
+
+    private var resizeHandle: some View {
+        Circle()
+            .fill(Color.white)
+            .stroke(Color.accentColor, lineWidth: 2)
+            .frame(width: Self.handleSize, height: Self.handleSize)
+            .contentShape(Circle().scale(Self.handleHitSize / Self.handleSize))
+            .offset(x: Self.handleSize / 2, y: Self.handleSize / 2)
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if resizeStartFontSize == nil {
+                            resizeStartFontSize = annotation.fontSize
+                        }
+                        let startSize = resizeStartFontSize!
+                        let diagonal = value.translation.width + value.translation.height
+                        let scale = 1.0 + diagonal / 150.0
+                        annotation.fontSize = min(200, max(8, startSize * scale))
+                    }
+                    .onEnded { _ in
+                        resizeStartFontSize = nil
+                    }
+            )
     }
 }
 
