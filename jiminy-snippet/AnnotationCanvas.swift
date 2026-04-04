@@ -98,17 +98,14 @@ struct AnnotationCanvas: View {
         if let index = texts.firstIndex(where: { $0.id == id }) {
             if let original = editingOriginalText, !original.isEmpty {
                 texts[index].text = original
+                texts[index].isEditing = false
+            } else {
+                texts.remove(at: index)
             }
-            texts[index].isEditing = false
         }
         editingTextId = nil
         editingOriginalText = nil
         focusedTextId = nil
-
-        // Remove empty texts after state has settled
-        DispatchQueue.main.async {
-            texts.removeAll { $0.text.isEmpty }
-        }
     }
 
     // MARK: - Annotations Overlay
@@ -127,25 +124,47 @@ struct AnnotationCanvas: View {
             )
         }
 
-        ForEach($texts) { $annotation in
-            textAnnotationView(annotation: $annotation)
+        ForEach(texts) { annotation in
+            textAnnotationView(for: annotation)
         }
     }
 
     // MARK: - Text Annotation Views
 
+    private func bindingForText(id: UUID) -> Binding<TextAnnotation> {
+        Binding(
+            get: {
+                texts.first(where: { $0.id == id })
+                    ?? TextAnnotation(position: .zero, text: "", color: .clear)
+            },
+            set: { newValue in
+                if let index = texts.firstIndex(where: { $0.id == id }) {
+                    texts[index] = newValue
+                }
+            }
+        )
+    }
+
     @ViewBuilder
-    private func textAnnotationView(annotation: Binding<TextAnnotation>) -> some View {
-        if editingTextId == annotation.wrappedValue.id {
-            let annotationId = annotation.wrappedValue.id
-            TextField("Type here", text: annotation.text)
-                .font(.system(size: annotation.wrappedValue.fontSize, weight: .bold))
-                .foregroundStyle(annotation.wrappedValue.color)
+    private func textAnnotationView(for annotation: TextAnnotation) -> some View {
+        let annotationId = annotation.id
+        if editingTextId == annotationId {
+            let textBinding = Binding<String>(
+                get: { texts.first(where: { $0.id == annotationId })?.text ?? "" },
+                set: { newValue in
+                    if let index = texts.firstIndex(where: { $0.id == annotationId }) {
+                        texts[index].text = newValue
+                    }
+                }
+            )
+            TextField("Type here", text: textBinding)
+                .font(.system(size: annotation.fontSize, weight: .bold))
+                .foregroundStyle(annotation.color)
                 .textFieldStyle(.plain)
                 .fixedSize()
                 .focused($focusedTextId, equals: annotationId)
-                .offset(x: annotation.wrappedValue.position.x,
-                        y: annotation.wrappedValue.position.y)
+                .offset(x: annotation.position.x,
+                        y: annotation.position.y)
                 .onAppear {
                     focusedTextId = annotationId
                 }
@@ -154,19 +173,21 @@ struct AnnotationCanvas: View {
                     focusedTextId = nil
                 }
                 .onExitCommand {
-                    cancelTextEditing(id: annotation.wrappedValue.id)
+                    cancelTextEditing(id: annotationId)
                 }
         } else {
             DraggableTextView(
-                annotation: annotation,
+                annotation: bindingForText(id: annotationId),
                 selectedTool: selectedTool,
-                isSelected: selectedAnnotationId == annotation.wrappedValue.id,
-                onSelect: { selectedAnnotationId = annotation.wrappedValue.id },
+                isSelected: selectedAnnotationId == annotationId,
+                onSelect: { selectedAnnotationId = annotationId },
                 onStartEditing: {
-                    editingOriginalText = annotation.wrappedValue.text
-                    editingTextId = annotation.wrappedValue.id
-                    selectedAnnotationId = annotation.wrappedValue.id
-                    annotation.wrappedValue.isEditing = true
+                    editingOriginalText = annotation.text
+                    editingTextId = annotationId
+                    selectedAnnotationId = annotationId
+                    if let index = texts.firstIndex(where: { $0.id == annotationId }) {
+                        texts[index].isEditing = true
+                    }
                 }
             )
         }
