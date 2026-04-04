@@ -146,11 +146,13 @@ struct AnnotationCanvas: View {
                     }
                 }
             )
-            TextField("Type here", text: textBinding)
+            TextField("", text: textBinding)
                 .font(.system(size: annotation.fontSize, weight: .bold))
                 .foregroundStyle(annotation.color)
                 .textFieldStyle(.plain)
                 .fixedSize()
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
                 .focused($focusedTextId, equals: annotationId)
                 .offset(x: annotation.position.x,
                         y: annotation.position.y)
