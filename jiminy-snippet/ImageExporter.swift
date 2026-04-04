@@ -14,30 +14,17 @@ struct ImageExporter {
         image: NSImage,
         arrows: [ArrowAnnotation],
         texts: [TextAnnotation],
-        rotation: Double,
         includeAnnotations: Bool
     ) -> NSImage? {
         let imageSize = image.size
 
-        // Calculate output size accounting for rotation
-        let normalizedRotation = ((Int(rotation) % 360) + 360) % 360
-        let isRotated90 = normalizedRotation == 90 || normalizedRotation == 270
-        let outputSize = isRotated90
-            ? NSSize(width: imageSize.height, height: imageSize.width)
-            : imageSize
-
-        let outputImage = NSImage(size: outputSize)
+        let outputImage = NSImage(size: imageSize)
         outputImage.lockFocusFlipped(true)
 
         guard let context = NSGraphicsContext.current?.cgContext else {
             outputImage.unlockFocus()
             return nil
         }
-
-        // Rotate around center
-        context.translateBy(x: outputSize.width / 2, y: outputSize.height / 2)
-        context.rotate(by: -rotation * .pi / 180) // negative because CG Y is flipped
-        context.translateBy(x: -imageSize.width / 2, y: -imageSize.height / 2)
 
         // NSImage.draw auto-flips in a flipped context, producing an inverted result.
         // Temporarily flip the coordinate system back for the image draw.

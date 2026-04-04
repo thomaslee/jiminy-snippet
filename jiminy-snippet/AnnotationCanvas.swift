@@ -15,7 +15,6 @@ struct AnnotationCanvas: View {
     @Binding var selectedAnnotationId: UUID?
     let selectedColor: Color
     let scale: CGFloat
-    let rotation: Double
 
     @State private var dragStart: CGPoint?
     @State private var dragEnd: CGPoint?
@@ -25,15 +24,6 @@ struct AnnotationCanvas: View {
 
     private var imageSize: CGSize {
         image.size
-    }
-
-    /// Image size after rotation, used for scroll view content sizing.
-    private var rotatedImageSize: CGSize {
-        let normalizedRotation = ((Int(rotation) % 360) + 360) % 360
-        let isRotated90 = normalizedRotation == 90 || normalizedRotation == 270
-        return isRotated90
-            ? CGSize(width: imageSize.height, height: imageSize.width)
-            : imageSize
     }
 
     var body: some View {
@@ -72,10 +62,9 @@ struct AnnotationCanvas: View {
                 }
                 .frame(width: imageSize.width, height: imageSize.height)
                 .scaleEffect(scale)
-                .rotationEffect(.degrees(rotation))
                 .frame(
-                    width: rotatedImageSize.width * scale,
-                    height: rotatedImageSize.height * scale
+                    width: imageSize.width * scale,
+                    height: imageSize.height * scale
                 )
             }
             .background(Color(nsColor: .windowBackgroundColor))

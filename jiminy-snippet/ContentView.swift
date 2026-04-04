@@ -14,7 +14,6 @@ struct ContentView: View {
     @State private var selectedTool: AnnotationTool? = nil
     @State private var selectedColorIndex: Int = 0
     @State private var scale: CGFloat = 1.0
-    @State private var rotation: Double = 0
     @State private var canvasSize: CGSize = .zero
 
     @State private var arrows: [ArrowAnnotation] = []
@@ -47,8 +46,7 @@ struct ContentView: View {
                     selectedTool: $selectedTool,
                     selectedAnnotationId: $selectedAnnotationId,
                     selectedColor: selectedColor,
-                    scale: scale,
-                    rotation: rotation
+                    scale: scale
                 )
                 .onGeometryChange(for: CGSize.self) { proxy in
                     proxy.size
@@ -70,7 +68,6 @@ struct ContentView: View {
             markUnsaved()
             zoomToFit()
         }
-        .onChange(of: rotation) { markUnsaved() }
         .onAppear {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 if event.keyCode == 51 || event.keyCode == 117 { // backspace or forward delete
@@ -122,8 +119,6 @@ struct ContentView: View {
                 colorPicker
                 Divider().frame(height: 24)
                 scaleControls
-                Divider().frame(height: 24)
-                rotateControls
                 Spacer()
                 exportMenu
                 undoButton
@@ -256,28 +251,6 @@ struct ContentView: View {
         }
     }
 
-    private var rotateControls: some View {
-        HStack(spacing: 4) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    rotation -= 90
-                }
-            } label: {
-                Image(systemName: "rotate.left")
-            }
-            .help("Rotate counter-clockwise")
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    rotation += 90
-                }
-            } label: {
-                Image(systemName: "rotate.right")
-            }
-            .help("Rotate clockwise")
-        }
-    }
-
     private var exportMenu: some View {
         Menu {
             Button("With Annotations") {
@@ -330,7 +303,6 @@ struct ContentView: View {
             image: image,
             arrows: arrows,
             texts: texts,
-            rotation: rotation,
             includeAnnotations: includeAnnotations
         ) else { return }
 
