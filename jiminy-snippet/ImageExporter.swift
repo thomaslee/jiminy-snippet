@@ -41,7 +41,7 @@ struct ImageExporter {
 
         if includeAnnotations {
             drawArrows(arrows, in: context)
-            drawTexts(texts)
+            drawTexts(texts, in: context)
         }
 
         outputImage.unlockFocus()
@@ -68,34 +68,19 @@ struct ImageExporter {
 
     private static func drawArrows(_ arrows: [ArrowAnnotation], in context: CGContext) {
         for arrow in arrows {
-            NSColor(arrow.color).setStroke()
-
-            let path = NSBezierPath()
-            path.lineWidth = arrow.lineWidth
-            path.lineCapStyle = .round
-            path.lineJoinStyle = .round
-            path.move(to: NSPoint(x: arrow.start.x, y: arrow.start.y))
-            path.line(to: NSPoint(x: arrow.end.x, y: arrow.end.y))
-            path.stroke()
-
-            if let wings = arrowHeadWings(tip: arrow.end, tail: arrow.start) {
-                let headPath = NSBezierPath()
-                headPath.lineWidth = arrow.lineWidth
-                headPath.lineCapStyle = .round
-                headPath.lineJoinStyle = .round
-                headPath.move(to: NSPoint(x: wings.left.x, y: wings.left.y))
-                headPath.line(to: NSPoint(x: arrow.end.x, y: arrow.end.y))
-                headPath.line(to: NSPoint(x: wings.right.x, y: wings.right.y))
-                headPath.stroke()
-            }
+            let cgPath = AnnotationRenderer.arrowPath(start: arrow.start, end: arrow.end).cgPath
+            context.setStrokeColor(NSColor(arrow.color).cgColor)
+            context.setLineWidth(arrow.lineWidth)
+            context.setLineCap(.round)
+            context.setLineJoin(.round)
+            context.addPath(cgPath)
+            context.strokePath()
         }
     }
 
-    private static func drawTexts(_ texts: [TextAnnotation]) {
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
-        for text in texts where !text.text.isEmpty {
-            let nsColor = NSColor(text.color)
-            let font = NSFont.boldSystemFont(ofSize: text.fontSize)
+    private static func drawTexts(_ texts: [TextAnnotation], in context: CGContext) {
+        for annotation in texts where !annotation.text.isEmpty {
+            let font = NSFont.boldSystemFont(ofSize: annotation.fontSize)
 
             let shadow = NSShadow()
             shadow.shadowOffset = NSSize(width: 1, height: -1)
@@ -104,14 +89,14 @@ struct ImageExporter {
 
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: font,
-                .foregroundColor: nsColor,
+                .foregroundColor: NSColor(annotation.color),
                 .shadow: shadow,
             ]
-            let string = NSAttributedString(string: text.text, attributes: attrs)
+            let string = NSAttributedString(string: annotation.text, attributes: attrs)
 
             context.saveGState()
-            context.translateBy(x: text.position.x, y: text.position.y)
-            context.rotate(by: -text.rotation * .pi / 180)
+            context.translateBy(x: annotation.position.x, y: annotation.position.y)
+            context.rotate(by: -annotation.rotation * .pi / 180)
             string.draw(at: .zero)
             context.restoreGState()
         }

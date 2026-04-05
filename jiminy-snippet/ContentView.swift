@@ -19,7 +19,6 @@ struct ContentView: View {
     @State private var arrows: [ArrowAnnotation] = []
     @State private var texts: [TextAnnotation] = []
     @State private var selectedAnnotationId: UUID? = nil
-    @State private var keyMonitor: Any?
     @State private var scaleText: String = "100"
 
     private let scaleStep: CGFloat = 0.25
@@ -67,30 +66,6 @@ struct ContentView: View {
         .onChange(of: screenshotManager.capturedImage) {
             markUnsaved()
             zoomToFit()
-        }
-        .onAppear {
-            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                if event.keyCode == 51 || event.keyCode == 117 { // backspace or forward delete
-                    if selectedAnnotationId != nil {
-                        deleteSelectedAnnotation()
-                        return nil
-                    }
-                }
-                if event.keyCode == 53 { // escape
-                    let isEditingText = texts.contains { $0.isEditing }
-                    if !isEditingText && selectedAnnotationId != nil {
-                        selectedAnnotationId = nil
-                        return nil
-                    }
-                }
-                return event
-            }
-        }
-        .onDisappear {
-            if let monitor = keyMonitor {
-                NSEvent.removeMonitor(monitor)
-                keyMonitor = nil
-            }
         }
     }
 
@@ -298,17 +273,6 @@ struct ContentView: View {
         }
         .help("Undo last annotation")
         .disabled(arrows.isEmpty && texts.isEmpty)
-    }
-
-    private func deleteSelectedAnnotation() {
-        guard let id = selectedAnnotationId else { return }
-        if let index = arrows.firstIndex(where: { $0.id == id }) {
-            arrows.remove(at: index)
-            selectedAnnotationId = nil
-        } else if let index = texts.firstIndex(where: { $0.id == id }) {
-            texts.remove(at: index)
-            selectedAnnotationId = nil
-        }
     }
 
     private func clearAnnotations() {

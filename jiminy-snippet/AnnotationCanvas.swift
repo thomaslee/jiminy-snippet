@@ -19,11 +19,11 @@ struct AnnotationCanvas: View {
     // MARK: - Gesture State
 
     @State private var dragOperation: DragOperation = .none
-    @State private var editingTextId: UUID?
-    @State private var editingOriginalText: String?
+    @State private var editing: EditingState?
     @FocusState private var focusedTextId: UUID?
     @State private var lastTapTime: Date?
     @State private var lastTapLocation: CGPoint?
+    @State private var keyMonitor: Any?
 
     private var imageSize: CGSize { image.size }
 
@@ -39,27 +39,22 @@ struct AnnotationCanvas: View {
         GeometryReader { _ in
             ScrollView([.horizontal, .vertical]) {
                 ZStack(alignment: .topLeading) {
-                    // Canvas draws image + all annotations
                     annotationCanvas
-
-                    // Gesture overlay
                     gestureLayer
 
-                    // Click-catcher to commit text editing
-                    if editingTextId != nil {
+                    if editing != nil {
                         Color.clear
                             .contentShape(Rectangle())
                             .frame(width: imageSize.width, height: imageSize.height)
                             .onTapGesture {
-                                if let id = editingTextId {
+                                if let id = editing?.id {
                                     commitTextEditing(id: id)
                                     focusedTextId = nil
                                 }
                             }
                     }
 
-                    // TextField overlay for editing text
-                    if let editingId = editingTextId,
+                    if let editingId = editing?.id,
                        let annotation = texts.first(where: { $0.id == editingId }) {
                         textFieldOverlay(for: annotation)
                     }
@@ -73,26 +68,63 @@ struct AnnotationCanvas: View {
             }
             .background(Color(nsColor: .windowBackgroundColor))
         }
+        .onAppear {
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                handleKeyDown(event)
+            }
+        }
+        .onDisappear {
+            if let monitor = keyMonitor {
+                NSEvent.removeMonitor(monitor)
+                keyMonitor = nil
+            }
+        }
+    }
+
+    // MARK: - Keyboard
+
+    private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
+        switch event.keyCode {
+        case 51, 117: // backspace, forward delete
+            if let id = selectedAnnotationId {
+                deleteAnnotation(id: id)
+                return nil
+            }
+        case 53: // escape
+            if editing == nil, selectedAnnotationId != nil {
+                selectedAnnotationId = nil
+                return nil
+            }
+        default:
+            break
+        }
+        return event
+    }
+
+    private func deleteAnnotation(id: UUID) {
+        if let index = arrows.firstIndex(where: { $0.id == id }) {
+            arrows.remove(at: index)
+        } else if let index = texts.firstIndex(where: { $0.id == id }) {
+            texts.remove(at: index)
+        }
+        selectedAnnotationId = nil
     }
 
     // MARK: - Canvas
 
     private var annotationCanvas: some View {
         Canvas { context, _ in
-            // Draw the base image
             context.draw(
                 Image(nsImage: image),
                 in: CGRect(origin: .zero, size: imageSize)
             )
 
-            // Draw arrows
             for arrow in arrows {
                 let selected = selectedAnnotationId == arrow.id
                 AnnotationRenderer.drawArrow(arrow, selected: selected, in: &context)
             }
 
-            // Draw text annotations (skip the one being edited)
-            for annotation in texts where annotation.id != editingTextId {
+            for annotation in texts where annotation.id != editing?.id {
                 let (resolved, size) = AnnotationRenderer.resolveText(annotation, in: context)
                 AnnotationRenderer.drawText(annotation, resolved: resolved, size: size, in: &context)
                 if selectedAnnotationId == annotation.id {
@@ -100,7 +132,6 @@ struct AnnotationCanvas: View {
                 }
             }
 
-            // Arrow creation preview
             if case .creatingArrow(let start, let end) = dragOperation {
                 let previewPath = AnnotationRenderer.arrowPath(start: start, end: end)
                 context.stroke(
@@ -135,7 +166,7 @@ struct AnnotationCanvas: View {
                         handleTap(at: value.location)
                     }
             )
-            .allowsHitTesting(editingTextId == nil)
+            .allowsHitTesting(editing == nil)
     }
 
     // MARK: - TextField Overlay
@@ -178,7 +209,6 @@ struct AnnotationCanvas: View {
 
         switch dragOperation {
         case .none:
-            // First drag event — determine what we're doing
             let startPoint = value.startLocation
 
             if selectedTool == .arrow {
@@ -287,7 +317,6 @@ struct AnnotationCanvas: View {
            let lastLoc = lastTapLocation,
            now.timeIntervalSince(lastTime) < NSEvent.doubleClickInterval,
            hypot(location.x - lastLoc.x, location.y - lastLoc.y) < 10 {
-            // Double tap
             lastTapTime = nil
             lastTapLocation = nil
             handleDoubleTap(at: location)
@@ -296,7 +325,6 @@ struct AnnotationCanvas: View {
         lastTapTime = now
         lastTapLocation = location
 
-        // Single tap
         if selectedTool == .text {
             createTextAnnotation(at: location)
             return
@@ -329,7 +357,7 @@ struct AnnotationCanvas: View {
     // MARK: - Text Editing
 
     private func createTextAnnotation(at location: CGPoint) {
-        if let editingId = editingTextId {
+        if let editingId = editing?.id {
             commitTextEditing(id: editingId)
             focusedTextId = nil
         }
@@ -337,12 +365,10 @@ struct AnnotationCanvas: View {
         let annotation = TextAnnotation(
             position: location,
             text: "",
-            color: selectedColor,
-            isEditing: true
+            color: selectedColor
         )
         texts.append(annotation)
-        editingOriginalText = ""
-        editingTextId = annotation.id
+        editing = EditingState(id: annotation.id, originalText: "")
         focusedTextId = annotation.id
         selectedAnnotationId = annotation.id
         selectedTool = nil
@@ -350,43 +376,38 @@ struct AnnotationCanvas: View {
 
     private func startEditing(id: UUID) {
         guard let annotation = texts.first(where: { $0.id == id }) else { return }
-        editingOriginalText = annotation.text
-        editingTextId = id
+        editing = EditingState(id: id, originalText: annotation.text)
         selectedAnnotationId = id
-        if let index = texts.firstIndex(where: { $0.id == id }) {
-            texts[index].isEditing = true
-        }
     }
 
     private func commitTextEditing(id: UUID) {
         if let index = texts.firstIndex(where: { $0.id == id }) {
             if texts[index].text.isEmpty {
                 texts.remove(at: index)
-            } else {
-                texts[index].isEditing = false
             }
         }
-        editingTextId = nil
-        editingOriginalText = nil
+        editing = nil
     }
 
     private func cancelTextEditing(id: UUID) {
         if let index = texts.firstIndex(where: { $0.id == id }) {
-            if let original = editingOriginalText, !original.isEmpty {
+            if let original = editing?.originalText, !original.isEmpty {
                 texts[index].text = original
-                texts[index].isEditing = false
             } else {
                 texts.remove(at: index)
             }
         }
-        editingTextId = nil
-        editingOriginalText = nil
+        editing = nil
         focusedTextId = nil
     }
-
 }
 
-// MARK: - Drag Operation
+// MARK: - Supporting Types
+
+private struct EditingState {
+    let id: UUID
+    let originalText: String
+}
 
 enum DragOperation {
     case none
