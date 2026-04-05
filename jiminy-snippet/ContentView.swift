@@ -110,9 +110,9 @@ struct ContentView: View {
                 screenshotManager.captureFullscreen()
             }
             Button("Screen snap...") {
-                // Not implemented
+                clearAnnotations()
+                screenshotManager.captureRegion()
             }
-            .disabled(true)
             Button("Timed screen snap...") {
                 // Not implemented
             }

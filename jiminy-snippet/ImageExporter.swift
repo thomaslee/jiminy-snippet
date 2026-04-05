@@ -93,7 +93,7 @@ struct ImageExporter {
 
             context.saveGState()
             context.translateBy(x: annotation.position.x, y: annotation.position.y)
-            context.rotate(by: -annotation.rotation * .pi / 180)
+            context.rotate(by: annotation.rotation * .pi / 180)
             context.scaleBy(x: annotation.scaleX, y: annotation.scaleY)
             string.draw(at: .zero)
             context.restoreGState()
