@@ -24,6 +24,7 @@ struct AnnotationCanvas: View {
     @State private var lastTapTime: Date?
     @State private var lastTapLocation: CGPoint?
     @State private var keyMonitor: Any?
+    @State private var handleMode: HandleMode = .resize
 
     private var imageSize: CGSize { image.size }
 
@@ -67,6 +68,9 @@ struct AnnotationCanvas: View {
                 )
             }
             .background(Color(nsColor: .windowBackgroundColor))
+        }
+        .onChange(of: selectedAnnotationId) {
+            handleMode = .resize
         }
         .onAppear {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -134,7 +138,9 @@ struct AnnotationCanvas: View {
                 let (resolved, size) = AnnotationRenderer.resolveText(annotation, in: context)
                 AnnotationRenderer.drawText(annotation, resolved: resolved, size: size, in: &context)
                 if selectedAnnotationId == annotation.id {
-                    AnnotationRenderer.drawTextSelection(annotation, size: size, in: &context)
+                    AnnotationRenderer.drawTextSelection(
+                        annotation, size: size, handleMode: handleMode, in: &context
+                    )
                 }
             }
 
@@ -218,6 +224,7 @@ struct AnnotationCanvas: View {
             let startPoint = value.startLocation
 
             if selectedTool == .arrow {
+                selectedAnnotationId = nil
                 dragOperation = .creatingArrow(start: startPoint, end: point)
                 return
             }
@@ -247,7 +254,31 @@ struct AnnotationCanvas: View {
                     if let annotation = texts.first(where: { $0.id == id }) {
                         switch zone {
                         case .resizeHandle:
-                            dragOperation = .resizingText(id: id, initialFontSize: annotation.fontSize)
+                            if handleMode == .rotate {
+                                let size = textSizes[id] ?? .zero
+                                let padded = RenderConstants.paddedTextSize(size)
+                                let localCenter = CGPoint(
+                                    x: padded.width / 2, y: padded.height / 2
+                                )
+                                let center = AnnotationRenderer.localToCanvas(
+                                    localCenter, origin: annotation.position,
+                                    angle: annotation.rotation
+                                )
+                                let startAngle = atan2(
+                                    startPoint.y - center.y,
+                                    startPoint.x - center.x
+                                ) * 180 / .pi
+                                dragOperation = .rotatingText(
+                                    id: id,
+                                    initialRotation: annotation.rotation,
+                                    referenceAngle: startAngle,
+                                    center: center
+                                )
+                            } else {
+                                dragOperation = .resizingText(
+                                    id: id, initialFontSize: annotation.fontSize
+                                )
+                            }
                         case .body:
                             dragOperation = .movingText(id: id, initialPosition: annotation.position)
                         default: break
@@ -301,6 +332,14 @@ struct AnnotationCanvas: View {
                 let scaleFactor = 1.0 + diagonal / 150.0
                 texts[index].fontSize = min(200, max(8, initialFontSize * scaleFactor))
             }
+
+        case .rotatingText(let id, let initialRotation, let referenceAngle, let center):
+            if let index = texts.firstIndex(where: { $0.id == id }) {
+                let currentAngle = atan2(
+                    point.y - center.y, point.x - center.x
+                ) * 180 / .pi
+                texts[index].rotation = initialRotation + (currentAngle - referenceAngle)
+            }
         }
     }
 
@@ -342,7 +381,12 @@ struct AnnotationCanvas: View {
         ) {
             switch hit {
             case .arrow(let id, _): selectedAnnotationId = id
-            case .text(let id, _): selectedAnnotationId = id
+            case .text(let id, _):
+                if id == selectedAnnotationId {
+                    handleMode = handleMode == .resize ? .rotate : .resize
+                } else {
+                    selectedAnnotationId = id
+                }
             }
         } else {
             selectedAnnotationId = nil
@@ -415,6 +459,11 @@ private struct EditingState {
     let originalText: String
 }
 
+enum HandleMode {
+    case resize
+    case rotate
+}
+
 private enum DragOperation {
     case none
     case creatingArrow(start: CGPoint, end: CGPoint)
@@ -423,4 +472,5 @@ private enum DragOperation {
     case movingArrowEnd(id: UUID, initialEnd: CGPoint)
     case movingText(id: UUID, initialPosition: CGPoint)
     case resizingText(id: UUID, initialFontSize: CGFloat)
+    case rotatingText(id: UUID, initialRotation: Double, referenceAngle: Double, center: CGPoint)
 }

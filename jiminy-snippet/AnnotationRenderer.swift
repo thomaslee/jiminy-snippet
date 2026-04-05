@@ -95,10 +95,11 @@ enum AnnotationRenderer {
         }
     }
 
-    /// Draws selection chrome and resize handle for a text annotation.
+    /// Draws selection chrome and resize/rotate handle for a text annotation.
     static func drawTextSelection(
         _ annotation: TextAnnotation,
         size: CGSize,
+        handleMode: HandleMode,
         in context: inout GraphicsContext
     ) {
         let padded = RenderConstants.paddedTextSize(size)
@@ -113,7 +114,11 @@ enum AnnotationRenderer {
                     y: padded.height + RenderConstants.handleSize / 2),
             origin: annotation.position, angle: annotation.rotation
         )
-        drawHandle(at: handlePoint, in: &context)
+        if handleMode == .rotate {
+            drawRotateHandle(at: handlePoint, in: &context)
+        } else {
+            drawHandle(at: handlePoint, in: &context)
+        }
     }
 
     // MARK: - Handles
@@ -129,6 +134,20 @@ enum AnnotationRenderer {
         let circle = Path(ellipseIn: rect)
         context.fill(circle, with: .color(.white))
         context.stroke(circle, with: .color(.accentColor), lineWidth: 2)
+    }
+
+    /// Draws a rotation-mode handle: accent-filled circle with a curved arrow arc.
+    static func drawRotateHandle(at point: CGPoint, in context: inout GraphicsContext) {
+        let size = RenderConstants.handleSize
+        let rect = CGRect(
+            x: point.x - size / 2,
+            y: point.y - size / 2,
+            width: size,
+            height: size
+        )
+        let circle = Path(ellipseIn: rect)
+        context.fill(circle, with: .color(.accentColor))
+        context.stroke(circle, with: .color(.white), lineWidth: 2)
     }
 
     // MARK: - Text Measurement (NSFont, for hit testing)
