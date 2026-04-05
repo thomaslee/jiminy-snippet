@@ -318,7 +318,8 @@ struct ContentView: View {
         let imageSize = image.size
         let scaleX = availableSize.width / imageSize.width
         let scaleY = availableSize.height / imageSize.height
-        scale = clamp(min(scaleX, scaleY), min: minScale, max: maxScale)
+        let fitScale = min(scaleX, scaleY)
+        scale = clamp(min(fitScale, 1.0), min: minScale, max: maxScale)
     }
 
     private func clamp(_ value: CGFloat, min lo: CGFloat, max hi: CGFloat) -> CGFloat {
