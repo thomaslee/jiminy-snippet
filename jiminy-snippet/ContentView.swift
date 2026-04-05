@@ -283,12 +283,12 @@ struct ContentView: View {
     private func exportImage(includeAnnotations: Bool) {
         guard let image = screenshotManager.capturedImage else { return }
 
-        guard let rendered = ImageExporter.render(
+        let rendered = ImageExporter.render(
             image: image,
             arrows: arrows,
             texts: texts,
             includeAnnotations: includeAnnotations
-        ) else { return }
+        )
 
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
@@ -330,7 +330,7 @@ struct ContentView: View {
         let w = image.size.width
         let h = image.size.height
 
-        screenshotManager.capturedImage = rotateImage(image, clockwise: clockwise)
+        screenshotManager.capturedImage = image.rotated(clockwise: clockwise)
 
         for i in arrows.indices {
             arrows[i].start = rotatePoint(arrows[i].start, imageWidth: w, imageHeight: h, clockwise: clockwise)
@@ -342,8 +342,7 @@ struct ContentView: View {
         }
 
         selectedAnnotationId = nil
-        zoomToFit()
-        markUnsaved()
+        // zoomToFit() and markUnsaved() are handled by onChange observers
     }
 
     private func rotatePoint(_ point: CGPoint, imageWidth w: CGFloat, imageHeight h: CGFloat, clockwise: Bool) -> CGPoint {

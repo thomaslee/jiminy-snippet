@@ -83,14 +83,20 @@ struct AnnotationCanvas: View {
 
     // MARK: - Keyboard
 
+    private enum KeyCode {
+        static let backspace: UInt16 = 51
+        static let forwardDelete: UInt16 = 117
+        static let escape: UInt16 = 53
+    }
+
     private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
         switch event.keyCode {
-        case 51, 117: // backspace, forward delete
-            if let id = selectedAnnotationId {
+        case KeyCode.backspace, KeyCode.forwardDelete:
+            if editing == nil, let id = selectedAnnotationId {
                 deleteAnnotation(id: id)
                 return nil
             }
-        case 53: // escape
+        case KeyCode.escape:
             if editing == nil, selectedAnnotationId != nil {
                 selectedAnnotationId = nil
                 return nil
@@ -409,7 +415,7 @@ private struct EditingState {
     let originalText: String
 }
 
-enum DragOperation {
+private enum DragOperation {
     case none
     case creatingArrow(start: CGPoint, end: CGPoint)
     case movingArrow(id: UUID, initialStart: CGPoint, initialEnd: CGPoint)

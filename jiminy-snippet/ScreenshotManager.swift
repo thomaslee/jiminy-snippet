@@ -12,13 +12,8 @@ import ScreenCaptureKit
 @Observable
 @MainActor
 final class ScreenshotManager {
-    static var shared: ScreenshotManager?
     var capturedImage: NSImage?
     var hasUnsavedChanges = false
-
-    init() {
-        ScreenshotManager.shared = self
-    }
 
     func captureFullscreen() {
         let visibleWindows = NSApplication.shared.windows.filter { $0.isVisible }

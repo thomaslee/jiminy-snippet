@@ -16,12 +16,16 @@ struct jiminy_snippetApp: App {
         WindowGroup {
             ContentView()
                 .environment(screenshotManager)
+                .onAppear { appDelegate.screenshotManager = screenshotManager }
         }
         .defaultSize(width: 900, height: 700)
     }
 }
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
+    var screenshotManager: ScreenshotManager?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async {
             self.ensureWindowVisible()
@@ -39,7 +43,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let manager = ScreenshotManager.shared,
+        guard let manager = screenshotManager,
               manager.hasUnsavedChanges else {
             return .terminateNow
         }

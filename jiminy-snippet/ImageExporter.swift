@@ -15,37 +15,31 @@ struct ImageExporter {
         arrows: [ArrowAnnotation],
         texts: [TextAnnotation],
         includeAnnotations: Bool
-    ) -> NSImage? {
+    ) -> NSImage {
         let imageSize = image.size
+        return NSImage(size: imageSize, flipped: true) { _ in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
 
-        let outputImage = NSImage(size: imageSize)
-        outputImage.lockFocusFlipped(true)
+            // NSImage.draw auto-flips in a flipped context, producing an inverted result.
+            // Temporarily flip the coordinate system back for the image draw.
+            context.saveGState()
+            context.translateBy(x: 0, y: imageSize.height)
+            context.scaleBy(x: 1, y: -1)
+            image.draw(
+                in: NSRect(origin: .zero, size: imageSize),
+                from: .zero,
+                operation: .copy,
+                fraction: 1.0
+            )
+            context.restoreGState()
 
-        guard let context = NSGraphicsContext.current?.cgContext else {
-            outputImage.unlockFocus()
-            return nil
+            if includeAnnotations {
+                ImageExporter.drawArrows(arrows, in: context)
+                ImageExporter.drawTexts(texts, in: context)
+            }
+
+            return true
         }
-
-        // NSImage.draw auto-flips in a flipped context, producing an inverted result.
-        // Temporarily flip the coordinate system back for the image draw.
-        context.saveGState()
-        context.translateBy(x: 0, y: imageSize.height)
-        context.scaleBy(x: 1, y: -1)
-        image.draw(
-            in: NSRect(origin: .zero, size: imageSize),
-            from: .zero,
-            operation: .copy,
-            fraction: 1.0
-        )
-        context.restoreGState()
-
-        if includeAnnotations {
-            drawArrows(arrows, in: context)
-            drawTexts(texts, in: context)
-        }
-
-        outputImage.unlockFocus()
-        return outputImage
     }
 
     static func save(image: NSImage, to url: URL) -> Bool {
@@ -80,12 +74,15 @@ struct ImageExporter {
 
     private static func drawTexts(_ texts: [TextAnnotation], in context: CGContext) {
         for annotation in texts where !annotation.text.isEmpty {
-            let font = NSFont.boldSystemFont(ofSize: annotation.fontSize)
+            let font = RenderConstants.textFont(size: annotation.fontSize)
 
             let shadow = NSShadow()
-            shadow.shadowOffset = NSSize(width: 1, height: -1)
-            shadow.shadowBlurRadius = 1
-            shadow.shadowColor = NSColor.black.withAlphaComponent(0.5)
+            shadow.shadowOffset = NSSize(
+                width: RenderConstants.shadowOffsetX,
+                height: -RenderConstants.shadowOffsetY
+            )
+            shadow.shadowBlurRadius = RenderConstants.shadowRadius
+            shadow.shadowColor = NSColor.black.withAlphaComponent(RenderConstants.shadowOpacity)
 
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: font,

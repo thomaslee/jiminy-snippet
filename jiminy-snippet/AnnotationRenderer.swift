@@ -13,12 +13,23 @@ enum RenderConstants {
     static let textPaddingH: CGFloat = 4
     static let textPaddingV: CGFloat = 2
 
+    // Shadow parameters (shared between Canvas and export rendering)
+    static let shadowOffsetX: CGFloat = 1
+    static let shadowOffsetY: CGFloat = 1
+    static let shadowRadius: CGFloat = 1
+    static let shadowOpacity: Double = 0.5
+
     /// The text's measured size plus padding on all sides.
     static func paddedTextSize(_ measured: CGSize) -> CGSize {
         CGSize(
             width: measured.width + textPaddingH * 2,
             height: measured.height + textPaddingV * 2
         )
+    }
+
+    /// Creates the NSFont used for text annotation rendering and measurement.
+    static func textFont(size: CGFloat) -> NSFont {
+        .boldSystemFont(ofSize: size)
     }
 }
 
@@ -73,7 +84,12 @@ enum AnnotationRenderer {
         context.drawLayer { ctx in
             ctx.translateBy(x: annotation.position.x, y: annotation.position.y)
             ctx.rotate(by: .degrees(annotation.rotation))
-            ctx.addFilter(.shadow(color: .black.opacity(0.5), radius: 1, x: 1, y: 1))
+            ctx.addFilter(.shadow(
+                color: .black.opacity(RenderConstants.shadowOpacity),
+                radius: RenderConstants.shadowRadius,
+                x: RenderConstants.shadowOffsetX,
+                y: RenderConstants.shadowOffsetY
+            ))
             let origin = CGPoint(x: RenderConstants.textPaddingH, y: RenderConstants.textPaddingV)
             ctx.draw(resolved, in: CGRect(origin: origin, size: size))
         }
@@ -118,7 +134,7 @@ enum AnnotationRenderer {
     // MARK: - Text Measurement (NSFont, for hit testing)
 
     static func measureText(_ annotation: TextAnnotation) -> CGSize {
-        let font = NSFont.boldSystemFont(ofSize: annotation.fontSize)
+        let font = RenderConstants.textFont(size: annotation.fontSize)
         let string = annotation.text.isEmpty ? " " : annotation.text
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         return NSAttributedString(string: string, attributes: attrs).size()
