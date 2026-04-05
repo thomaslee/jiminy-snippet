@@ -28,6 +28,7 @@ struct AnnotationCanvas: View {
 
     private var imageSize: CGSize { image.size }
 
+
     private var textSizes: [UUID: CGSize] {
         var sizes: [UUID: CGSize] = [:]
         for annotation in texts {
@@ -61,6 +62,7 @@ struct AnnotationCanvas: View {
                     }
                 }
                 .frame(width: imageSize.width, height: imageSize.height)
+                .compositingGroup()
                 .scaleEffect(scale)
                 .frame(
                     width: imageSize.width * scale,
@@ -201,6 +203,11 @@ struct AnnotationCanvas: View {
             .padding(.horizontal, RenderConstants.textPaddingH)
             .padding(.vertical, RenderConstants.textPaddingV)
             .focused($focusedTextId, equals: annotationId)
+            // Force a non-identity transform on the TextField's layer. Without
+            // this, SwiftUI collapses `scaleEffect(1.0)` to identity, which
+            // leaves macOS's shared field editor unable to paint the insertion
+            // caret on the second and subsequent edit sessions at 100% zoom.
+            .scaleEffect(1.0001, anchor: .topLeading)
             .scaleEffect(x: annotation.scaleX, y: annotation.scaleY, anchor: .topLeading)
             .rotationEffect(.degrees(annotation.rotation), anchor: .topLeading)
             .offset(x: annotation.position.x, y: annotation.position.y)
