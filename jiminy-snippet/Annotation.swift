@@ -34,6 +34,8 @@ struct TextAnnotation: Identifiable, Equatable {
     var color: Color
     var fontSize: CGFloat = 24
     var rotation: Double = 0
+    var scaleX: CGFloat = 1
+    var scaleY: CGFloat = 1
 }
 
 extension NSImage {

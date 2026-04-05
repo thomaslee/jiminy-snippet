@@ -6,12 +6,43 @@
 import CoreGraphics
 import Foundation
 
+/// Position of a handle around a text annotation's bounding box.
+enum HandlePosition: CaseIterable {
+    case topLeft, top, topRight
+    case left, right
+    case bottomLeft, bottom, bottomRight
+
+    var isCorner: Bool {
+        switch self {
+        case .topLeft, .topRight, .bottomLeft, .bottomRight: return true
+        default: return false
+        }
+    }
+
+    /// Returns the local (pre-rotation) position of this handle for a given scaled padded size.
+    func localPoint(scaledSize: CGSize) -> CGPoint {
+        let w = scaledSize.width
+        let h = scaledSize.height
+        switch self {
+        case .topLeft:     return CGPoint(x: 0,   y: 0)
+        case .top:         return CGPoint(x: w/2, y: 0)
+        case .topRight:    return CGPoint(x: w,   y: 0)
+        case .left:        return CGPoint(x: 0,   y: h/2)
+        case .right:       return CGPoint(x: w,   y: h/2)
+        case .bottomLeft:  return CGPoint(x: 0,   y: h)
+        case .bottom:      return CGPoint(x: w/2, y: h)
+        case .bottomRight: return CGPoint(x: w,   y: h)
+        }
+    }
+}
+
 /// Identifies which part of an annotation was hit.
 enum HitZone {
     case body
+    case exterior        // outside the body but within the grab margin (selected text only)
     case startEndpoint
     case endEndpoint
-    case resizeHandle
+    case handle(HandlePosition)
 }
 
 /// Result of a hit test — either an arrow or text annotation hit.
@@ -38,22 +69,34 @@ func hitTestAnnotations(
             point, origin: annotation.position, angle: annotation.rotation
         )
         let padded = RenderConstants.paddedTextSize(size)
-        let localRect = CGRect(origin: .zero, size: padded)
+        let scaledSize = CGSize(
+            width: padded.width * annotation.scaleX,
+            height: padded.height * annotation.scaleY
+        )
+        let localRect = CGRect(origin: .zero, size: scaledSize)
 
-        // Check resize handle first (only if selected)
+        // Check handles first (only if selected)
         if annotation.id == selectedId {
-            let localHandle = CGPoint(
-                x: padded.width + RenderConstants.handleSize / 2,
-                y: padded.height + RenderConstants.handleSize / 2
-            )
-            if distance(localPoint, localHandle) < RenderConstants.handleHitRadius {
-                return .text(id: annotation.id, zone: .resizeHandle)
+            for pos in HandlePosition.allCases {
+                let handlePoint = pos.localPoint(scaledSize: scaledSize)
+                if distance(localPoint, handlePoint) < RenderConstants.handleHitRadius {
+                    return .text(id: annotation.id, zone: .handle(pos))
+                }
             }
         }
 
         // Check body
         if localRect.contains(localPoint) {
             return .text(id: annotation.id, zone: .body)
+        }
+
+        // Check exterior margin (only for the selected annotation — used for rotation)
+        if annotation.id == selectedId {
+            let margin: CGFloat = 20
+            let expandedRect = localRect.insetBy(dx: -margin, dy: -margin)
+            if expandedRect.contains(localPoint) {
+                return .text(id: annotation.id, zone: .exterior)
+            }
         }
     }
 

@@ -201,6 +201,7 @@ struct AnnotationCanvas: View {
             .padding(.horizontal, RenderConstants.textPaddingH)
             .padding(.vertical, RenderConstants.textPaddingV)
             .focused($focusedTextId, equals: annotationId)
+            .scaleEffect(x: annotation.scaleX, y: annotation.scaleY, anchor: .topLeading)
             .rotationEffect(.degrees(annotation.rotation), anchor: .topLeading)
             .offset(x: annotation.position.x, y: annotation.position.y)
             .onAppear { focusedTextId = annotationId }
@@ -253,17 +254,16 @@ struct AnnotationCanvas: View {
                     selectedAnnotationId = id
                     if let annotation = texts.first(where: { $0.id == id }) {
                         switch zone {
-                        case .resizeHandle:
+                        case .handle(let handlePos):
+                            let size = textSizes[id] ?? .zero
+                            let padded = RenderConstants.paddedTextSize(size)
+                            let scaledSize = CGSize(
+                                width: padded.width * annotation.scaleX,
+                                height: padded.height * annotation.scaleY
+                            )
+                            let center = textCenter(for: annotation)
+
                             if handleMode == .rotate {
-                                let size = textSizes[id] ?? .zero
-                                let padded = RenderConstants.paddedTextSize(size)
-                                let localCenter = CGPoint(
-                                    x: padded.width / 2, y: padded.height / 2
-                                )
-                                let center = AnnotationRenderer.localToCanvas(
-                                    localCenter, origin: annotation.position,
-                                    angle: annotation.rotation
-                                )
                                 let startAngle = atan2(
                                     startPoint.y - center.y,
                                     startPoint.x - center.x
@@ -275,12 +275,54 @@ struct AnnotationCanvas: View {
                                     center: center
                                 )
                             } else {
-                                dragOperation = .resizingText(
-                                    id: id, initialFontSize: annotation.fontSize
+                                let axis: ScaleAxis
+                                let initialRef: CGFloat
+                                if handlePos.isCorner {
+                                    axis = .uniform
+                                    let handleLocal = handlePos.localPoint(scaledSize: scaledSize)
+                                    let handleCanvas = AnnotationRenderer.localToCanvas(
+                                        handleLocal, origin: annotation.position,
+                                        angle: annotation.rotation
+                                    )
+                                    initialRef = hypot(
+                                        handleCanvas.x - center.x,
+                                        handleCanvas.y - center.y
+                                    )
+                                } else if handlePos == .left || handlePos == .right {
+                                    axis = .horizontal
+                                    initialRef = padded.width * annotation.scaleX / 2
+                                } else {
+                                    axis = .vertical
+                                    initialRef = padded.height * annotation.scaleY / 2
+                                }
+                                dragOperation = .scalingText(
+                                    id: id,
+                                    axis: axis,
+                                    initialScaleX: annotation.scaleX,
+                                    initialScaleY: annotation.scaleY,
+                                    initialPosition: annotation.position,
+                                    center: center,
+                                    paddedWidth: padded.width,
+                                    paddedHeight: padded.height,
+                                    initialRef: initialRef
                                 )
                             }
                         case .body:
                             dragOperation = .movingText(id: id, initialPosition: annotation.position)
+                        case .exterior:
+                            if handleMode == .rotate {
+                                let center = textCenter(for: annotation)
+                                let startAngle = atan2(
+                                    startPoint.y - center.y,
+                                    startPoint.x - center.x
+                                ) * 180 / .pi
+                                dragOperation = .rotatingText(
+                                    id: id,
+                                    initialRotation: annotation.rotation,
+                                    referenceAngle: startAngle,
+                                    center: center
+                                )
+                            }
                         default: break
                         }
                     }
@@ -326,11 +368,50 @@ struct AnnotationCanvas: View {
                 )
             }
 
-        case .resizingText(let id, let initialFontSize):
+        case .scalingText(let id, let axis, let initialScaleX, let initialScaleY,
+                         let initialPosition, let center, let paddedWidth, let paddedHeight,
+                         let initialRef):
             if let index = texts.firstIndex(where: { $0.id == id }) {
-                let diagonal = translation.width + translation.height
-                let scaleFactor = 1.0 + diagonal / 150.0
-                texts[index].fontSize = min(200, max(8, initialFontSize * scaleFactor))
+                guard initialRef > 0.001 else { break }
+                let angle = texts[index].rotation
+                var newSX = initialScaleX
+                var newSY = initialScaleY
+
+                switch axis {
+                case .uniform:
+                    let dist = hypot(point.x - center.x, point.y - center.y)
+                    let factor = dist / initialRef
+                    newSX = initialScaleX * factor
+                    newSY = initialScaleY * factor
+
+                case .horizontal:
+                    let rad = angle * .pi / 180
+                    let axisX = cos(rad), axisY = sin(rad)
+                    let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
+                    newSX = initialScaleX * abs(proj) / initialRef
+
+                case .vertical:
+                    let rad = angle * .pi / 180
+                    let axisX = -sin(rad), axisY = cos(rad)
+                    let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
+                    newSY = initialScaleY * abs(proj) / initialRef
+                }
+
+                newSX = max(0.2, newSX)
+                newSY = max(0.2, newSY)
+                texts[index].scaleX = newSX
+                texts[index].scaleY = newSY
+
+                // Reposition so center stays fixed
+                let newLocalCenter = CGPoint(
+                    x: paddedWidth * newSX / 2,
+                    y: paddedHeight * newSY / 2
+                )
+                let rad = angle * .pi / 180
+                texts[index].position = CGPoint(
+                    x: center.x - (newLocalCenter.x * cos(rad) - newLocalCenter.y * sin(rad)),
+                    y: center.y - (newLocalCenter.x * sin(rad) + newLocalCenter.y * cos(rad))
+                )
             }
 
         case .rotatingText(let id, let initialRotation, let referenceAngle, let center):
@@ -450,6 +531,19 @@ struct AnnotationCanvas: View {
         editing = nil
         focusedTextId = nil
     }
+
+    /// Returns the center of a text annotation's scaled bounding box in canvas space.
+    private func textCenter(for annotation: TextAnnotation) -> CGPoint {
+        let size = textSizes[annotation.id] ?? .zero
+        let padded = RenderConstants.paddedTextSize(size)
+        let localCenter = CGPoint(
+            x: padded.width * annotation.scaleX / 2,
+            y: padded.height * annotation.scaleY / 2
+        )
+        return AnnotationRenderer.localToCanvas(
+            localCenter, origin: annotation.position, angle: annotation.rotation
+        )
+    }
 }
 
 // MARK: - Supporting Types
@@ -464,6 +558,13 @@ enum HandleMode {
     case rotate
 }
 
+/// Which axis a text scaling operation affects.
+private enum ScaleAxis {
+    case uniform    // corner handles — both axes
+    case horizontal // left/right handles
+    case vertical   // top/bottom handles
+}
+
 private enum DragOperation {
     case none
     case creatingArrow(start: CGPoint, end: CGPoint)
@@ -471,6 +572,16 @@ private enum DragOperation {
     case movingArrowStart(id: UUID, initialStart: CGPoint)
     case movingArrowEnd(id: UUID, initialEnd: CGPoint)
     case movingText(id: UUID, initialPosition: CGPoint)
-    case resizingText(id: UUID, initialFontSize: CGFloat)
+    case scalingText(
+        id: UUID,
+        axis: ScaleAxis,
+        initialScaleX: CGFloat,
+        initialScaleY: CGFloat,
+        initialPosition: CGPoint,
+        center: CGPoint,
+        paddedWidth: CGFloat,
+        paddedHeight: CGFloat,
+        initialRef: CGFloat
+    )
     case rotatingText(id: UUID, initialRotation: Double, referenceAngle: Double, center: CGPoint)
 }
