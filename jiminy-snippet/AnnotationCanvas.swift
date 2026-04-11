@@ -299,7 +299,6 @@ struct AnnotationCanvas: View {
                                     axis: axis,
                                     initialScaleX: annotation.scaleX,
                                     initialScaleY: annotation.scaleY,
-                                    initialPosition: annotation.position,
                                     center: center,
                                     paddedWidth: padded.width,
                                     paddedHeight: padded.height,
@@ -358,50 +357,45 @@ struct AnnotationCanvas: View {
             }
 
         case .scalingText(let id, let axis, let initialScaleX, let initialScaleY,
-                         let initialPosition, let center, let paddedWidth, let paddedHeight,
-                         let initialRef):
-            if let index = texts.firstIndex(where: { $0.id == id }) {
-                guard initialRef > 0.001 else { break }
-                let angle = texts[index].rotation
-                var newSX = initialScaleX
-                var newSY = initialScaleY
+                         let center, let paddedWidth, let paddedHeight, let initialRef):
+            guard initialRef > 0.001,
+                  let index = texts.firstIndex(where: { $0.id == id }) else { break }
+            let rad = texts[index].rotation * .pi / 180
+            var newSX = initialScaleX
+            var newSY = initialScaleY
 
-                switch axis {
-                case .uniform:
-                    let dist = hypot(point.x - center.x, point.y - center.y)
-                    let factor = dist / initialRef
-                    newSX = initialScaleX * factor
-                    newSY = initialScaleY * factor
+            switch axis {
+            case .uniform:
+                let dist = hypot(point.x - center.x, point.y - center.y)
+                let factor = dist / initialRef
+                newSX = initialScaleX * factor
+                newSY = initialScaleY * factor
 
-                case .horizontal:
-                    let rad = angle * .pi / 180
-                    let axisX = cos(rad), axisY = sin(rad)
-                    let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
-                    newSX = initialScaleX * abs(proj) / initialRef
+            case .horizontal:
+                let axisX = cos(rad), axisY = sin(rad)
+                let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
+                newSX = initialScaleX * abs(proj) / initialRef
 
-                case .vertical:
-                    let rad = angle * .pi / 180
-                    let axisX = -sin(rad), axisY = cos(rad)
-                    let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
-                    newSY = initialScaleY * abs(proj) / initialRef
-                }
-
-                newSX = max(0.2, newSX)
-                newSY = max(0.2, newSY)
-                texts[index].scaleX = newSX
-                texts[index].scaleY = newSY
-
-                // Reposition so center stays fixed
-                let newLocalCenter = CGPoint(
-                    x: paddedWidth * newSX / 2,
-                    y: paddedHeight * newSY / 2
-                )
-                let rad = angle * .pi / 180
-                texts[index].position = CGPoint(
-                    x: center.x - (newLocalCenter.x * cos(rad) - newLocalCenter.y * sin(rad)),
-                    y: center.y - (newLocalCenter.x * sin(rad) + newLocalCenter.y * cos(rad))
-                )
+            case .vertical:
+                let axisX = -sin(rad), axisY = cos(rad)
+                let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
+                newSY = initialScaleY * abs(proj) / initialRef
             }
+
+            newSX = max(0.2, newSX)
+            newSY = max(0.2, newSY)
+            texts[index].scaleX = newSX
+            texts[index].scaleY = newSY
+
+            // Reposition so center stays fixed
+            let newLocalCenter = CGPoint(
+                x: paddedWidth * newSX / 2,
+                y: paddedHeight * newSY / 2
+            )
+            texts[index].position = CGPoint(
+                x: center.x - (newLocalCenter.x * cos(rad) - newLocalCenter.y * sin(rad)),
+                y: center.y - (newLocalCenter.x * sin(rad) + newLocalCenter.y * cos(rad))
+            )
 
         case .rotatingText(let id, let initialRotation, let referenceAngle, let center):
             if let index = texts.firstIndex(where: { $0.id == id }) {
@@ -576,7 +570,6 @@ private enum DragOperation {
         axis: ScaleAxis,
         initialScaleX: CGFloat,
         initialScaleY: CGFloat,
-        initialPosition: CGPoint,
         center: CGPoint,
         paddedWidth: CGFloat,
         paddedHeight: CGFloat,
