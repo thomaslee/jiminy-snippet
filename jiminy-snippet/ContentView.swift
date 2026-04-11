@@ -20,6 +20,8 @@ struct ContentView: View {
     @State private var texts: [TextAnnotation] = []
     @State private var selectedAnnotationId: UUID? = nil
     @State private var scaleText: String = "100"
+    @State private var cropMode: Bool = false
+    @State private var cropRect: CGRect? = nil
 
     private let scaleStep: CGFloat = 0.25
     private let minScale: CGFloat = 0.25
@@ -45,7 +47,9 @@ struct ContentView: View {
                     selectedTool: $selectedTool,
                     selectedAnnotationId: $selectedAnnotationId,
                     selectedColor: selectedColor,
-                    scale: scale
+                    scale: scale,
+                    cropMode: cropMode,
+                    cropRect: $cropRect
                 )
                 .onGeometryChange(for: CGSize.self) { proxy in
                     proxy.size
@@ -101,6 +105,8 @@ struct ContentView: View {
                 scaleControls
                 Divider().frame(height: 24)
                 rotateControls
+                Divider().frame(height: 24)
+                cropControls
                 Spacer()
                 exportMenu
                 undoButton
@@ -254,6 +260,25 @@ struct ContentView: View {
         }
     }
 
+    private var cropControls: some View {
+        HStack(spacing: 4) {
+            Button {
+                toggleCropMode()
+            } label: {
+                Image(systemName: "crop")
+            }
+            .buttonStyle(.bordered)
+            .tint(cropMode ? .accentColor : nil)
+            .help("Crop")
+
+            if cropMode {
+                Button("Apply") { applyCrop() }
+                    .disabled(cropRect == nil)
+                Button("Cancel") { cancelCrop() }
+            }
+        }
+    }
+
     private var exportMenu: some View {
         Menu {
             Button("Save As...") {
@@ -367,6 +392,51 @@ struct ContentView: View {
 
     private func clamp(_ value: CGFloat, min lo: CGFloat, max hi: CGFloat) -> CGFloat {
         Swift.min(hi, Swift.max(lo, value))
+    }
+
+    private func toggleCropMode() {
+        if cropMode {
+            cancelCrop()
+        } else {
+            cropMode = true
+            cropRect = nil
+            selectedAnnotationId = nil
+            selectedTool = nil
+        }
+    }
+
+    private func cancelCrop() {
+        cropMode = false
+        cropRect = nil
+    }
+
+    private func applyCrop() {
+        guard let rect = cropRect,
+              let image = screenshotManager.capturedImage,
+              let cropped = image.cropped(to: rect)
+        else {
+            cancelCrop()
+            return
+        }
+
+        let dx = -rect.origin.x
+        let dy = -rect.origin.y
+        for i in arrows.indices {
+            arrows[i].start.x += dx
+            arrows[i].start.y += dy
+            arrows[i].end.x += dx
+            arrows[i].end.y += dy
+        }
+        for i in texts.indices {
+            texts[i].position.x += dx
+            texts[i].position.y += dy
+        }
+
+        selectedAnnotationId = nil
+        screenshotManager.capturedImage = cropped
+        cropMode = false
+        cropRect = nil
+        // markUnsaved() and zoomToFit() are handled by onChange observers
     }
 
     private func rotateImageAndAnnotations(clockwise: Bool) {

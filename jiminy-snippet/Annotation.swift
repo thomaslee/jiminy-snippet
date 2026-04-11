@@ -39,6 +39,37 @@ struct TextAnnotation: Identifiable, Equatable {
 }
 
 extension NSImage {
+    /// Returns a new image cropped to `rect` (expressed in the image's point space).
+    /// Preserves the full pixel resolution of the source bitmap.
+    func cropped(to rect: CGRect) -> NSImage? {
+        guard let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return nil
+        }
+        let pointSize = size
+        guard pointSize.width > 0, pointSize.height > 0 else { return nil }
+
+        let sx = CGFloat(cgImage.width) / pointSize.width
+        let sy = CGFloat(cgImage.height) / pointSize.height
+        let pixelRect = CGRect(
+            x: rect.origin.x * sx,
+            y: rect.origin.y * sy,
+            width: rect.width * sx,
+            height: rect.height * sy
+        ).integral
+
+        guard pixelRect.width >= 1, pixelRect.height >= 1,
+              let croppedCG = cgImage.cropping(to: pixelRect)
+        else {
+            return nil
+        }
+
+        let newPointSize = CGSize(
+            width: pixelRect.width / sx,
+            height: pixelRect.height / sy
+        )
+        return NSImage(cgImage: croppedCG, size: newPointSize)
+    }
+
     /// Returns a new image rotated by 90° with swapped dimensions.
     func rotated(clockwise: Bool) -> NSImage {
         let originalSize = size

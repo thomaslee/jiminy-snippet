@@ -15,6 +15,8 @@ struct AnnotationCanvas: View {
     @Binding var selectedAnnotationId: UUID?
     let selectedColor: Color
     let scale: CGFloat
+    let cropMode: Bool
+    @Binding var cropRect: CGRect?
 
     // MARK: - Gesture State
 
@@ -145,9 +147,48 @@ struct AnnotationCanvas: View {
                     style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
                 )
             }
+
+            if cropMode {
+                drawCropOverlay(in: &context)
+            }
         }
         .frame(width: imageSize.width, height: imageSize.height)
         .allowsHitTesting(false)
+    }
+
+    // MARK: - Crop Overlay
+
+    private func drawCropOverlay(in context: inout GraphicsContext) {
+        let imageBounds = CGRect(origin: .zero, size: imageSize)
+
+        let overlayRect: CGRect? = {
+            if case .croppingSelection(let start, let end) = dragOperation {
+                return CGRect(
+                    x: min(start.x, end.x),
+                    y: min(start.y, end.y),
+                    width: abs(end.x - start.x),
+                    height: abs(end.y - start.y)
+                ).intersection(imageBounds)
+            }
+            return cropRect
+        }()
+
+        let dimColor = GraphicsContext.Shading.color(.black.opacity(0.5))
+
+        if let rect = overlayRect, rect.width > 0, rect.height > 0 {
+            var dimPath = Path()
+            dimPath.addRect(imageBounds)
+            dimPath.addRect(rect)
+            context.fill(dimPath, with: dimColor, style: FillStyle(eoFill: true))
+
+            context.stroke(
+                Path(rect),
+                with: .color(.white),
+                lineWidth: 1.5 / max(scale, 0.1)
+            )
+        } else {
+            context.fill(Path(imageBounds), with: dimColor)
+        }
     }
 
     // MARK: - Gesture Layer
@@ -237,6 +278,9 @@ struct AnnotationCanvas: View {
         case .creatingArrow(let start, _):
             dragOperation = .creatingArrow(start: start, end: point)
 
+        case .croppingSelection(let start, _):
+            dragOperation = .croppingSelection(start: start, end: point)
+
         case .movingArrow(let id, let initialStart, let initialEnd, let mask):
             arrows.update(id: id) { arrow in
                 if mask.contains(.start) { arrow.start = initialStart + translation }
@@ -300,6 +344,10 @@ struct AnnotationCanvas: View {
     /// Mutates selection state as a side-effect, but only returns a `DragOperation`
     /// when an actual drag should begin.
     private func beginDrag(at startPoint: CGPoint) -> DragOperation? {
+        if cropMode {
+            return .croppingSelection(start: startPoint, end: startPoint)
+        }
+
         if selectedTool == .arrow {
             selectedAnnotationId = nil
             return .creatingArrow(start: startPoint, end: startPoint)
@@ -348,6 +396,16 @@ struct AnnotationCanvas: View {
             let arrow = ArrowAnnotation(start: start, end: end, color: selectedColor)
             arrows.append(arrow)
             selectedTool = nil
+        } else if case .croppingSelection(let start, _) = dragOperation {
+            let end = value.location
+            let imageBounds = CGRect(origin: .zero, size: imageSize)
+            let rect = CGRect(
+                x: min(start.x, end.x),
+                y: min(start.y, end.y),
+                width: abs(end.x - start.x),
+                height: abs(end.y - start.y)
+            ).intersection(imageBounds)
+            cropRect = (rect.width > 1 && rect.height > 1) ? rect : nil
         }
         dragOperation = .none
     }
@@ -355,6 +413,8 @@ struct AnnotationCanvas: View {
     // MARK: - Tap Handling
 
     private func handleTap(at location: CGPoint) {
+        if cropMode { return }
+
         // Double-tap detection
         let now = Date()
         if let lastTime = lastTapTime,
@@ -547,6 +607,7 @@ private struct ArrowEndpointMask: OptionSet {
 private enum DragOperation {
     case none
     case creatingArrow(start: CGPoint, end: CGPoint)
+    case croppingSelection(start: CGPoint, end: CGPoint)
     case movingArrow(id: UUID, initialStart: CGPoint, initialEnd: CGPoint, mask: ArrowEndpointMask)
     case movingText(id: UUID, initialPosition: CGPoint)
     case scalingText(
