@@ -17,6 +17,8 @@ struct AnnotationCanvas: View {
     let scale: CGFloat
     let cropMode: Bool
     @Binding var cropRect: CGRect?
+    var onCropApply: () -> Void = {}
+    var onCropCancel: () -> Void = {}
 
     // MARK: - Gesture State
 
@@ -64,6 +66,7 @@ struct AnnotationCanvas: View {
                     width: imageSize.width * scale,
                     height: imageSize.height * scale
                 )
+                .overlay(alignment: .topLeading) { cropControlsOverlay }
             }
             .background(Color(nsColor: .windowBackgroundColor))
         }
@@ -157,6 +160,59 @@ struct AnnotationCanvas: View {
     }
 
     // MARK: - Crop Overlay
+
+    @ViewBuilder
+    private var cropControlsOverlay: some View {
+        if cropMode, let rect = cropRect, !isCroppingDrag {
+            let offset = cropControlsOffset(for: rect)
+            HStack(spacing: 8) {
+                Button("Cancel", role: .cancel) { onCropCancel() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Apply") { onCropApply() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(6)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .shadow(radius: 4)
+            .fixedSize()
+            .offset(x: offset.x, y: offset.y)
+        }
+    }
+
+    /// Positions the Apply/Cancel pill so it stays inside the ScrollView's
+    /// content frame — preferring just below the crop rect, but flipping above
+    /// or tucking inside at the bottom when there isn't enough room.
+    private func cropControlsOffset(for rect: CGRect) -> CGPoint {
+        let padding: CGFloat = 8
+        // Rough size of the pill; exact measurement isn't worth a GeometryReader.
+        let estimatedWidth: CGFloat = 180
+        let estimatedHeight: CGFloat = 44
+
+        let contentWidth = imageSize.width * scale
+        let contentHeight = imageSize.height * scale
+
+        let belowY = rect.maxY * scale + padding
+        let aboveY = rect.minY * scale - estimatedHeight - padding
+
+        let y: CGFloat
+        if belowY + estimatedHeight <= contentHeight {
+            y = belowY
+        } else if aboveY >= 0 {
+            y = aboveY
+        } else {
+            y = max(0, contentHeight - estimatedHeight - padding)
+        }
+
+        let maxX = max(0, contentWidth - estimatedWidth)
+        let x = max(0, min(maxX, rect.maxX * scale - estimatedWidth))
+        return CGPoint(x: x, y: y)
+    }
+
+    private var isCroppingDrag: Bool {
+        if case .croppingSelection = dragOperation { return true }
+        return false
+    }
 
     private func drawCropOverlay(in context: inout GraphicsContext) {
         let imageBounds = CGRect(origin: .zero, size: imageSize)

@@ -49,7 +49,9 @@ struct ContentView: View {
                     selectedColor: selectedColor,
                     scale: scale,
                     cropMode: cropMode,
-                    cropRect: $cropRect
+                    cropRect: $cropRect,
+                    onCropApply: applyCrop,
+                    onCropCancel: cancelCrop
                 )
                 .onGeometryChange(for: CGSize.self) { proxy in
                     proxy.size
@@ -261,22 +263,14 @@ struct ContentView: View {
     }
 
     private var cropControls: some View {
-        HStack(spacing: 4) {
-            Button {
-                toggleCropMode()
-            } label: {
-                Image(systemName: "crop")
-            }
-            .buttonStyle(.bordered)
-            .tint(cropMode ? .accentColor : nil)
-            .help("Crop")
-
-            if cropMode {
-                Button("Apply") { applyCrop() }
-                    .disabled(cropRect == nil)
-                Button("Cancel") { cancelCrop() }
-            }
+        Button {
+            toggleCropMode()
+        } label: {
+            Image(systemName: "crop")
         }
+        .buttonStyle(.bordered)
+        .tint(cropMode ? .accentColor : nil)
+        .help("Crop")
     }
 
     private var exportMenu: some View {
