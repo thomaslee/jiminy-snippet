@@ -21,6 +21,12 @@ struct AnnotationCanvas: View {
     @Binding var cropRect: CGRect?
     var onCropApply: () -> Void = {}
     var onCropCancel: () -> Void = {}
+    /// Called immediately before any discrete edit that mutates `arrows`,
+    /// `texts`, or the image itself — the owner records an undo snapshot here.
+    var onBeginEdit: () -> Void = {}
+    /// Called when an in-flight edit is abandoned (e.g. text editing cancelled)
+    /// so the matching `onBeginEdit` snapshot can be discarded.
+    var onDiscardEdit: () -> Void = {}
 
     // MARK: - Gesture State
 
@@ -138,6 +144,10 @@ struct AnnotationCanvas: View {
     }
 
     private func deleteAnnotation(id: UUID) {
+        guard arrows.contains(where: { $0.id == id }) || texts.contains(where: { $0.id == id }) else {
+            return
+        }
+        onBeginEdit()
         arrows.removeAll { $0.id == id }
         texts.removeAll { $0.id == id }
         selectedAnnotationId = nil
@@ -370,6 +380,12 @@ struct AnnotationCanvas: View {
         switch dragOperation {
         case .none:
             guard let op = beginDrag(at: value.startLocation) else { return }
+            // Crop selection drags only touch `cropRect`, which isn't part of
+            // the undoable canvas state — the actual crop is recorded later,
+            // in ContentView.applyCrop.
+            if case .croppingSelection = op {} else {
+                onBeginEdit()
+            }
             dragOperation = op
             // Re-enter so the current translation is applied immediately,
             // rather than waiting one frame for the next drag event.
@@ -562,6 +578,7 @@ struct AnnotationCanvas: View {
             commitTextEditing(id: editingId)
         }
 
+        onBeginEdit()
         let annotation = TextAnnotation(
             position: location,
             text: "",
@@ -576,6 +593,7 @@ struct AnnotationCanvas: View {
 
     private func startEditing(id: UUID) {
         guard let annotation = texts.first(where: { $0.id == id }) else { return }
+        onBeginEdit()
         editing = EditingState(id: id, originalText: annotation.text)
         selectedAnnotationId = id
     }
@@ -598,6 +616,10 @@ struct AnnotationCanvas: View {
                 texts.remove(at: index)
             }
         }
+        // The snapshot pushed at the start of editing now represents a no-op,
+        // since the cancel reverted to the pre-edit state. Drop it so the user
+        // doesn't burn an undo slot stepping over cancelled edits.
+        onDiscardEdit()
         editing = nil
         focusedTextId = nil
     }

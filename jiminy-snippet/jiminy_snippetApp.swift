@@ -24,6 +24,9 @@ struct jiminy_snippetApp: App {
                 SaveSceneMenuItem()
                 SaveAsSceneMenuItem()
             }
+            CommandGroup(replacing: .undoRedo) {
+                UndoSceneMenuItem()
+            }
             CommandGroup(replacing: .pasteboard) {
                 CopySceneMenuItem()
                 PasteSceneMenuItem()
@@ -33,6 +36,18 @@ struct jiminy_snippetApp: App {
                 Divider()
             }
         }
+    }
+}
+
+private struct UndoSceneMenuItem: View {
+    @FocusedValue(\.undoScene) private var undoScene
+
+    var body: some View {
+        Button("Undo") {
+            undoScene?()
+        }
+        .keyboardShortcut("z", modifiers: .command)
+        .disabled(undoScene == nil)
     }
 }
 
@@ -147,6 +162,10 @@ struct ZoomActualSizeSceneActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct UndoSceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var copyScene: (() -> Void)? {
         get { self[CopySceneActionKey.self] }
@@ -186,6 +205,11 @@ extension FocusedValues {
     var zoomActualSizeScene: (() -> Void)? {
         get { self[ZoomActualSizeSceneActionKey.self] }
         set { self[ZoomActualSizeSceneActionKey.self] = newValue }
+    }
+
+    var undoScene: (() -> Void)? {
+        get { self[UndoSceneActionKey.self] }
+        set { self[UndoSceneActionKey.self] = newValue }
     }
 }
 

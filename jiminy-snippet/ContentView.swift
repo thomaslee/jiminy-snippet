@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var selectedAnnotationId: UUID? = nil
     @State private var cropMode: Bool = false
     @State private var cropRect: CGRect? = nil
+    @State private var undoHistory = UndoHistory()
 
     private let scaleStep: CGFloat = 0.25
     private let minScale: CGFloat = 0.25
@@ -31,6 +32,36 @@ struct ContentView: View {
     }
 
     var body: some View {
+        mainContent
+            .frame(minWidth: 800, minHeight: 600)
+            .onChange(of: arrows) { markUnsaved() }
+            .onChange(of: texts) { markUnsaved() }
+            .onChange(of: screenshotManager.capturedImage) {
+                markUnsaved()
+                zoomToFit()
+            }
+            .onChange(of: selectedAnnotationId) {
+                syncPaletteToSelection()
+            }
+            .modifier(SceneCommandValues(
+                hasImage: screenshotManager.capturedImage != nil,
+                canZoomIn: scale < maxScale,
+                canZoomOut: scale > minScale,
+                canUndo: !undoHistory.isEmpty,
+                copy: copyToClipboard,
+                paste: pasteFromClipboard,
+                save: save,
+                saveAs: saveAs,
+                zoomIn: zoomIn,
+                zoomOut: zoomOut,
+                zoomToFit: zoomToFit,
+                zoomActualSize: zoomToActualSize,
+                undo: undo
+            ))
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
         VStack(spacing: 0) {
             toolbar
                 .padding(.horizontal, 12)
@@ -52,7 +83,9 @@ struct ContentView: View {
                     cropMode: cropMode,
                     cropRect: $cropRect,
                     onCropApply: applyCrop,
-                    onCropCancel: cancelCrop
+                    onCropCancel: cancelCrop,
+                    onBeginEdit: recordSnapshot,
+                    onDiscardEdit: discardLastSnapshot
                 )
                 .onGeometryChange(for: CGSize.self) { proxy in
                     proxy.size
@@ -67,24 +100,6 @@ struct ContentView: View {
                 emptyState
             }
         }
-        .frame(minWidth: 800, minHeight: 600)
-        .onChange(of: arrows) { markUnsaved() }
-        .onChange(of: texts) { markUnsaved() }
-        .onChange(of: screenshotManager.capturedImage) {
-            markUnsaved()
-            zoomToFit()
-        }
-        .onChange(of: selectedAnnotationId) {
-            syncPaletteToSelection()
-        }
-        .focusedSceneValue(\.copyScene, screenshotManager.capturedImage == nil ? nil : { copyToClipboard() })
-        .focusedSceneValue(\.pasteScene, { pasteFromClipboard() })
-        .focusedSceneValue(\.saveScene, screenshotManager.capturedImage == nil ? nil : { save() })
-        .focusedSceneValue(\.saveAsScene, screenshotManager.capturedImage == nil ? nil : { saveAs() })
-        .focusedSceneValue(\.zoomInScene, screenshotManager.capturedImage == nil || scale >= maxScale ? nil : { zoomIn() })
-        .focusedSceneValue(\.zoomOutScene, screenshotManager.capturedImage == nil || scale <= minScale ? nil : { zoomOut() })
-        .focusedSceneValue(\.zoomToFitScene, screenshotManager.capturedImage == nil ? nil : { zoomToFit() })
-        .focusedSceneValue(\.zoomActualSizeScene, screenshotManager.capturedImage == nil ? nil : { zoomToActualSize() })
     }
 
     private var emptyState: some View {
@@ -222,12 +237,15 @@ struct ContentView: View {
     private func selectColor(at index: Int) {
         selectedColorIndex = index
         let color = AnnotationPalette.colors[index].color
-        if let id = selectedAnnotationId {
-            if let i = arrows.firstIndex(where: { $0.id == id }) {
-                arrows[i].color = color
-            } else if let i = texts.firstIndex(where: { $0.id == id }) {
-                texts[i].color = color
-            }
+        guard let id = selectedAnnotationId else { return }
+        if let i = arrows.firstIndex(where: { $0.id == id }) {
+            guard arrows[i].color != color else { return }
+            recordSnapshot()
+            arrows[i].color = color
+        } else if let i = texts.firstIndex(where: { $0.id == id }) {
+            guard texts[i].color != color else { return }
+            recordSnapshot()
+            texts[i].color = color
         }
     }
 
@@ -282,16 +300,12 @@ struct ContentView: View {
 
     private var undoButton: some View {
         Button {
-            if !texts.isEmpty {
-                texts.removeLast()
-            } else if !arrows.isEmpty {
-                arrows.removeLast()
-            }
+            undo()
         } label: {
             Image(systemName: "arrow.uturn.backward")
         }
-        .help("Undo last annotation")
-        .disabled(arrows.isEmpty && texts.isEmpty)
+        .help("Undo last edit")
+        .disabled(undoHistory.isEmpty)
     }
 
     private func syncPaletteToSelection() {
@@ -312,6 +326,38 @@ struct ContentView: View {
     private func clearAnnotations() {
         arrows.removeAll()
         texts.removeAll()
+        undoHistory.clear()
+    }
+
+    /// Captures the current editable state so that the next mutation can be
+    /// undone. Called by the canvas at the start of every discrete edit (drag,
+    /// text create/edit, delete) and directly from ContentView for crop,
+    /// rotate, and color changes.
+    private func recordSnapshot() {
+        guard let image = screenshotManager.capturedImage else { return }
+        undoHistory.push(
+            EditSnapshot(image: image, arrows: arrows, texts: texts)
+        )
+    }
+
+    /// Drops the most recently pushed snapshot. Used when an in-flight edit is
+    /// abandoned (e.g. text editing is cancelled) so cancelled operations don't
+    /// leave no-op entries on the stack.
+    private func discardLastSnapshot() {
+        _ = undoHistory.pop()
+    }
+
+    private func undo() {
+        guard let snapshot = undoHistory.pop() else { return }
+        arrows = snapshot.arrows
+        texts = snapshot.texts
+        if screenshotManager.capturedImage !== snapshot.image {
+            screenshotManager.capturedImage = snapshot.image
+        }
+        selectedAnnotationId = nil
+        if cropMode {
+            cancelCrop()
+        }
     }
 
     private func pasteFromClipboard() {
@@ -426,6 +472,8 @@ struct ContentView: View {
             return
         }
 
+        recordSnapshot()
+
         let dx = -rect.origin.x
         let dy = -rect.origin.y
         for i in arrows.indices {
@@ -448,6 +496,7 @@ struct ContentView: View {
 
     private func rotateImageAndAnnotations(clockwise: Bool) {
         guard let image = screenshotManager.capturedImage else { return }
+        recordSnapshot()
         let w = image.size.width
         let h = image.size.height
 
@@ -478,6 +527,85 @@ struct ContentView: View {
         if screenshotManager.capturedImage != nil {
             screenshotManager.hasUnsavedChanges = true
         }
+    }
+}
+
+/// Publishes the view's scene-level command actions via `focusedSceneValue`.
+/// Extracted into a separate modifier so the main `body` stays under the
+/// Swift type-checker's complexity budget as more commands are added.
+private struct SceneCommandValues: ViewModifier {
+    let hasImage: Bool
+    let canZoomIn: Bool
+    let canZoomOut: Bool
+    let canUndo: Bool
+    let copy: () -> Void
+    let paste: () -> Void
+    let save: () -> Void
+    let saveAs: () -> Void
+    let zoomIn: () -> Void
+    let zoomOut: () -> Void
+    let zoomToFit: () -> Void
+    let zoomActualSize: () -> Void
+    let undo: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(fileAndClipboardValues)
+            .modifier(zoomValues)
+            .focusedSceneValue(\.undoScene, canUndo ? undo : nil)
+    }
+
+    private var fileAndClipboardValues: some ViewModifier {
+        FileAndClipboardSceneValues(
+            hasImage: hasImage,
+            copy: copy, paste: paste, save: save, saveAs: saveAs
+        )
+    }
+
+    private var zoomValues: some ViewModifier {
+        ZoomSceneValues(
+            hasImage: hasImage,
+            canZoomIn: canZoomIn,
+            canZoomOut: canZoomOut,
+            zoomIn: zoomIn,
+            zoomOut: zoomOut,
+            zoomToFit: zoomToFit,
+            zoomActualSize: zoomActualSize
+        )
+    }
+}
+
+private struct FileAndClipboardSceneValues: ViewModifier {
+    let hasImage: Bool
+    let copy: () -> Void
+    let paste: () -> Void
+    let save: () -> Void
+    let saveAs: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .focusedSceneValue(\.copyScene, hasImage ? copy : nil)
+            .focusedSceneValue(\.pasteScene, paste)
+            .focusedSceneValue(\.saveScene, hasImage ? save : nil)
+            .focusedSceneValue(\.saveAsScene, hasImage ? saveAs : nil)
+    }
+}
+
+private struct ZoomSceneValues: ViewModifier {
+    let hasImage: Bool
+    let canZoomIn: Bool
+    let canZoomOut: Bool
+    let zoomIn: () -> Void
+    let zoomOut: () -> Void
+    let zoomToFit: () -> Void
+    let zoomActualSize: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .focusedSceneValue(\.zoomInScene, (hasImage && canZoomIn) ? zoomIn : nil)
+            .focusedSceneValue(\.zoomOutScene, (hasImage && canZoomOut) ? zoomOut : nil)
+            .focusedSceneValue(\.zoomToFitScene, hasImage ? zoomToFit : nil)
+            .focusedSceneValue(\.zoomActualSizeScene, hasImage ? zoomActualSize : nil)
     }
 }
 
