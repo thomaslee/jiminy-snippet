@@ -565,10 +565,22 @@ struct ContentView: View {
             rectangles: rectangles
         )
 
-        if ImageExporter.save(image: rendered, to: url) {
+        do {
+            try ImageExporter.save(image: rendered, to: url)
             screenshotManager.currentFileURL = url
             screenshotManager.hasUnsavedChanges = false
+        } catch {
+            presentSaveError(url: url, error: error)
         }
+    }
+
+    private func presentSaveError(url: URL, error: Error) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Couldn’t Save “\(url.lastPathComponent)”"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     private func zoomIn() {

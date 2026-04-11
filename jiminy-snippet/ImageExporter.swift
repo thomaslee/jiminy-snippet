@@ -8,6 +8,17 @@
 import AppKit
 import SwiftUI
 
+enum ImageExportError: LocalizedError {
+    case pngEncodingFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .pngEncodingFailed:
+            return "Could not encode the image as PNG."
+        }
+    }
+}
+
 struct ImageExporter {
 
     static func render(
@@ -72,15 +83,11 @@ struct ImageExporter {
         return CGSize(width: maxW, height: maxH)
     }
 
-    static func save(image: NSImage, to url: URL) -> Bool {
-        guard let pngData = pngData(from: image) else { return false }
-        do {
-            try pngData.write(to: url)
-            return true
-        } catch {
-            print("Failed to write PNG: \(error)")
-            return false
+    static func save(image: NSImage, to url: URL) throws {
+        guard let pngData = pngData(from: image) else {
+            throw ImageExportError.pngEncodingFailed
         }
+        try pngData.write(to: url)
     }
 
     @discardableResult
