@@ -28,13 +28,19 @@ struct AnnotationCanvas: View {
 
     private var imageSize: CGSize { image.size }
 
-
     private var textSizes: [UUID: CGSize] {
         var sizes: [UUID: CGSize] = [:]
         for annotation in texts {
             sizes[annotation.id] = AnnotationRenderer.measureText(annotation)
         }
         return sizes
+    }
+
+    private func hitTest(at point: CGPoint) -> AnnotationHit? {
+        hitTestAnnotations(
+            at: point, arrows: arrows, texts: texts,
+            selectedId: selectedAnnotationId, textSizes: textSizes
+        )
     }
 
     var body: some View {
@@ -51,7 +57,6 @@ struct AnnotationCanvas: View {
                             .onTapGesture {
                                 if let id = editing?.id {
                                     commitTextEditing(id: id)
-                                    focusedTextId = nil
                                 }
                             }
                     }
@@ -214,7 +219,6 @@ struct AnnotationCanvas: View {
             .onAppear { focusedTextId = annotationId }
             .onSubmit {
                 commitTextEditing(id: annotationId)
-                focusedTextId = nil
             }
             .onExitCommand {
                 cancelTextEditing(id: annotationId)
@@ -237,10 +241,7 @@ struct AnnotationCanvas: View {
                 return
             }
 
-            if let hit = hitTestAnnotations(
-                at: startPoint, arrows: arrows, texts: texts,
-                selectedId: selectedAnnotationId, textSizes: textSizes
-            ) {
+            if let hit = hitTest(at: startPoint) {
                 switch hit {
                 case .arrow(let id, let zone):
                     selectedAnnotationId = id
@@ -271,16 +272,7 @@ struct AnnotationCanvas: View {
                             let center = textCenter(for: annotation)
 
                             if handleMode == .rotate {
-                                let startAngle = atan2(
-                                    startPoint.y - center.y,
-                                    startPoint.x - center.x
-                                ) * 180 / .pi
-                                dragOperation = .rotatingText(
-                                    id: id,
-                                    initialRotation: annotation.rotation,
-                                    referenceAngle: startAngle,
-                                    center: center
-                                )
+                                dragOperation = beginRotation(for: annotation, from: startPoint)
                             } else {
                                 let axis: ScaleAxis
                                 let initialRef: CGFloat
@@ -318,17 +310,7 @@ struct AnnotationCanvas: View {
                             dragOperation = .movingText(id: id, initialPosition: annotation.position)
                         case .exterior:
                             if handleMode == .rotate {
-                                let center = textCenter(for: annotation)
-                                let startAngle = atan2(
-                                    startPoint.y - center.y,
-                                    startPoint.x - center.x
-                                ) * 180 / .pi
-                                dragOperation = .rotatingText(
-                                    id: id,
-                                    initialRotation: annotation.rotation,
-                                    referenceAngle: startAngle,
-                                    center: center
-                                )
+                                dragOperation = beginRotation(for: annotation, from: startPoint)
                             }
                         default: break
                         }
@@ -463,10 +445,7 @@ struct AnnotationCanvas: View {
             return
         }
 
-        if let hit = hitTestAnnotations(
-            at: location, arrows: arrows, texts: texts,
-            selectedId: selectedAnnotationId, textSizes: textSizes
-        ) {
+        if let hit = hitTest(at: location) {
             switch hit {
             case .arrow(let id, _): selectedAnnotationId = id
             case .text(let id, _):
@@ -482,13 +461,8 @@ struct AnnotationCanvas: View {
     }
 
     private func handleDoubleTap(at location: CGPoint) {
-        if let hit = hitTestAnnotations(
-            at: location, arrows: arrows, texts: texts,
-            selectedId: selectedAnnotationId, textSizes: textSizes
-        ) {
-            if case .text(let id, _) = hit {
-                startEditing(id: id)
-            }
+        if case .text(let id, _) = hitTest(at: location) {
+            startEditing(id: id)
         }
     }
 
@@ -497,7 +471,6 @@ struct AnnotationCanvas: View {
     private func createTextAnnotation(at location: CGPoint) {
         if let editingId = editing?.id {
             commitTextEditing(id: editingId)
-            focusedTextId = nil
         }
 
         let annotation = TextAnnotation(
@@ -525,6 +498,7 @@ struct AnnotationCanvas: View {
             }
         }
         editing = nil
+        focusedTextId = nil
     }
 
     private func cancelTextEditing(id: UUID) {
@@ -537,6 +511,24 @@ struct AnnotationCanvas: View {
         }
         editing = nil
         focusedTextId = nil
+    }
+
+    /// Builds a `rotatingText` drag operation anchored at the annotation's center.
+    private func beginRotation(
+        for annotation: TextAnnotation,
+        from startPoint: CGPoint
+    ) -> DragOperation {
+        let center = textCenter(for: annotation)
+        let referenceAngle = atan2(
+            startPoint.y - center.y,
+            startPoint.x - center.x
+        ) * 180 / .pi
+        return .rotatingText(
+            id: annotation.id,
+            initialRotation: annotation.rotation,
+            referenceAngle: referenceAngle,
+            center: center
+        )
     }
 
     /// Returns the center of a text annotation's scaled bounding box in canvas space.
