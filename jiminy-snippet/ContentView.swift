@@ -115,6 +115,7 @@ struct ContentView: View {
                 undoButton
             }
         }
+        .controlSize(.large)
     }
 
     private var captureMenu: some View {
@@ -148,7 +149,6 @@ struct ContentView: View {
                     selectedTool = selectedTool == tool ? nil : tool
                 } label: {
                     Image(systemName: tool.systemImage)
-                        .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.bordered)
                 .tint(selectedTool == tool ? .accentColor : nil)
