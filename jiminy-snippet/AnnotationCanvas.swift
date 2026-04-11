@@ -30,6 +30,12 @@ struct AnnotationCanvas: View {
     @State private var keyMonitor: Any?
     @State private var handleMode: HandleMode = .resize
 
+    // Scroll view state used to keep the viewport centred over the same
+    // image-space point when `scale` changes.
+    @State private var scrollPosition = ScrollPosition()
+    @State private var viewportSize: CGSize = .zero
+    @State private var scrollContentOffset: CGPoint = .zero
+
     private var imageSize: CGSize { image.size }
 
     private var textSizes: [UUID: CGSize] {
@@ -69,6 +75,16 @@ struct AnnotationCanvas: View {
                 .overlay(alignment: .topLeading) { cropControlsOverlay }
             }
             .background(Color(nsColor: .windowBackgroundColor))
+            .scrollPosition($scrollPosition)
+            .onScrollGeometryChange(for: CGPoint.self, of: { $0.contentOffset }) { _, new in
+                scrollContentOffset = new
+            }
+            .onScrollGeometryChange(for: CGSize.self, of: { $0.containerSize }) { _, new in
+                viewportSize = new
+            }
+        }
+        .onChange(of: scale) { oldValue, newValue in
+            recenterAfterZoom(from: oldValue, to: newValue)
         }
         .onChange(of: selectedAnnotationId) {
             handleMode = .resize
@@ -618,6 +634,29 @@ struct AnnotationCanvas: View {
             paddedHeight: padded.height,
             initialRef: initialRef
         )
+    }
+
+    /// Keeps the point currently at the viewport centre pinned there across a
+    /// change in `scale`. Without this, the `ScrollView` preserves its raw
+    /// pixel offset, so zooming appears to pivot around an arbitrary location.
+    private func recenterAfterZoom(from oldScale: CGFloat, to newScale: CGFloat) {
+        guard oldScale != newScale,
+              oldScale > 0,
+              viewportSize.width > 0, viewportSize.height > 0
+        else { return }
+
+        // Image-space point that was centred in the viewport before the zoom.
+        let focus = CGPoint(
+            x: (scrollContentOffset.x + viewportSize.width / 2) / oldScale,
+            y: (scrollContentOffset.y + viewportSize.height / 2) / oldScale
+        )
+
+        // Top-left offset required to put that same point back in the centre.
+        let newOffset = CGPoint(
+            x: focus.x * newScale - viewportSize.width / 2,
+            y: focus.y * newScale - viewportSize.height / 2
+        )
+        scrollPosition.scrollTo(point: newOffset)
     }
 
     /// Returns the center of a text annotation's scaled bounding box in canvas space.
