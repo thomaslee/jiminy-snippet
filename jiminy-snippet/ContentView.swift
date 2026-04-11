@@ -144,7 +144,6 @@ struct ContentView: View {
                 cropControls
                 Spacer()
                 exportMenu
-                undoButton
             }
         }
         .controlSize(.large)
@@ -369,16 +368,6 @@ struct ContentView: View {
         .menuStyle(.borderedButton)
         .fixedSize()
         .help("Save or copy the annotated image")
-    }
-
-    private var undoButton: some View {
-        Button {
-            undo()
-        } label: {
-            Image(systemName: "arrow.uturn.backward")
-        }
-        .help("Undo last edit")
-        .disabled(!undoHistory.canUndo)
     }
 
     private func syncPaletteToSelection() {
