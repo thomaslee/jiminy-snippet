@@ -148,10 +148,15 @@ struct ContentView: View {
             Button("From Clipboard") {
                 pasteFromClipboard()
             }
-            Button("Timed screen snap...") {
-                // Not implemented
+            Menu("Timed screen snap") {
+                ForEach(timedCaptureDurations, id: \.self) { seconds in
+                    Button("\(seconds) Seconds") {
+                        beginNewCapture {
+                            screenshotManager.captureRegionAfterDelay(seconds: seconds)
+                        }
+                    }
+                }
             }
-            .disabled(true)
         } label: {
             Label("Capture", systemImage: "camera")
         }
@@ -159,6 +164,10 @@ struct ContentView: View {
         .fixedSize()
         .help("Capture a new screenshot")
     }
+
+    /// Preset durations offered in the "Timed screen snap" submenu. 5 seconds
+    /// is the default (first entry a user is likely to reach for).
+    private var timedCaptureDurations: [Int] { [3, 5, 10] }
 
     /// Prompts the user to discard unsaved changes (if any) and, on
     /// confirmation, clears existing annotations and runs `capture`.
@@ -168,6 +177,9 @@ struct ContentView: View {
             informativeText: "Taking a new screenshot will discard your current edits. Continue?",
             proceedButtonTitle: "Continue"
         ) else { return }
+        // Abort any pending timed capture so switching capture modes mid-
+        // countdown restores the Jiminy window before the new action runs.
+        screenshotManager.cancelTimedCapture()
         clearAnnotations()
         capture()
     }

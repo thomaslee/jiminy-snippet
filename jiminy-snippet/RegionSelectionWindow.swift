@@ -139,3 +139,63 @@ private final class RegionSelectionView: NSView {
         addCursorRect(bounds, cursor: .crosshair)
     }
 }
+
+// MARK: - Region Outline Window
+
+/// A click-through fullscreen overlay that outlines a pre-selected region.
+/// Used during timed region capture so the user can see what they're about to
+/// capture while the countdown runs — the window ignores mouse events so the
+/// user can still interact with whatever they're preparing behind it.
+final class RegionOutlineWindow: NSWindow {
+    init(screen: NSScreen, rect: CGRect) {
+        super.init(
+            contentRect: screen.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        isOpaque = false
+        backgroundColor = .clear
+        level = .statusBar
+        ignoresMouseEvents = true
+        hasShadow = false
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+
+        let view = RegionOutlineView(frame: CGRect(origin: .zero, size: screen.frame.size), selection: rect)
+        contentView = view
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+private final class RegionOutlineView: NSView {
+    private let selection: CGRect
+
+    init(frame: CGRect, selection: CGRect) {
+        self.selection = selection
+        super.init(frame: frame)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // Light dim everywhere so the selection stands out, then punch a hole
+        // in the dim for the selected region.
+        NSColor.black.withAlphaComponent(0.15).setFill()
+        bounds.fill()
+
+        NSGraphicsContext.current?.compositingOperation = .clear
+        selection.fill()
+
+        // Bright border around the selected region.
+        NSGraphicsContext.current?.compositingOperation = .sourceOver
+        let border = NSBezierPath(rect: selection)
+        border.lineWidth = 3
+        NSColor.white.setStroke()
+        border.stroke()
+    }
+}
