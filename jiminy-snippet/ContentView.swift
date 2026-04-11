@@ -140,6 +140,7 @@ struct ContentView: View {
         }
         .menuStyle(.borderedButton)
         .fixedSize()
+        .help("Capture a new screenshot")
     }
 
     private var toolPicker: some View {
@@ -152,6 +153,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(selectedTool == tool ? .accentColor : nil)
+                .help(tool.helpText)
             }
         }
     }
@@ -228,7 +230,7 @@ struct ContentView: View {
         }
         .buttonStyle(.bordered)
         .tint(cropMode ? .accentColor : nil)
-        .help("Crop")
+        .help(cropMode ? "Exit crop mode" : "Crop image")
     }
 
     private var exportMenu: some View {
@@ -246,6 +248,7 @@ struct ContentView: View {
         }
         .menuStyle(.borderedButton)
         .fixedSize()
+        .help("Save or copy the annotated image")
     }
 
     private var undoButton: some View {

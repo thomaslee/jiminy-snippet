@@ -17,6 +17,13 @@ enum AnnotationTool: String, CaseIterable {
         case .text: "textformat"
         }
     }
+
+    var helpText: String {
+        switch self {
+        case .arrow: "Draw an arrow"
+        case .text: "Add a text label"
+        }
+    }
 }
 
 struct ArrowAnnotation: Identifiable, Equatable {
