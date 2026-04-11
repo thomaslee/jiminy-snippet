@@ -90,6 +90,7 @@ struct AnnotationCanvas: View {
                 viewportSize = new
             }
             .simultaneousGesture(pinchZoomGesture)
+            .overlay { cropInstructionOverlay }
         }
         .onChange(of: scale) { oldValue, newValue in
             recenterAfterZoom(from: oldValue, to: newValue)
@@ -192,7 +193,7 @@ struct AnnotationCanvas: View {
             HStack(spacing: 8) {
                 Button("Cancel", role: .cancel) { onCropCancel() }
                     .keyboardShortcut(.cancelAction)
-                Button("Apply") { onCropApply() }
+                Button("Crop") { onCropApply() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
             }
@@ -204,7 +205,7 @@ struct AnnotationCanvas: View {
         }
     }
 
-    /// Positions the Apply/Cancel pill so it stays inside the ScrollView's
+    /// Positions the Crop/Cancel pill so it stays inside the ScrollView's
     /// content frame — preferring just below the crop rect, but flipping above
     /// or tucking inside at the bottom when there isn't enough room.
     private func cropControlsOffset(for rect: CGRect) -> CGPoint {
@@ -231,6 +232,23 @@ struct AnnotationCanvas: View {
         let maxX = max(0, contentWidth - estimatedWidth)
         let x = max(0, min(maxX, rect.maxX * scale - estimatedWidth))
         return CGPoint(x: x, y: y)
+    }
+
+    /// Instructional hint shown while crop mode is active but the user hasn't
+    /// yet drawn a selection. Sits in the ScrollView's viewport space (not
+    /// image space), so it stays centred regardless of zoom or scroll.
+    @ViewBuilder
+    private var cropInstructionOverlay: some View {
+        if cropMode, cropRect == nil, !isCroppingDrag {
+            Text("Drag to select a crop region")
+                .font(.headline)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial, in: Capsule())
+                .shadow(radius: 4)
+                .allowsHitTesting(false)
+        }
     }
 
     private var isCroppingDrag: Bool {
