@@ -100,6 +100,7 @@ extension NSImage {
 
 enum AnnotationPalette {
     static let colors: [(name: String, color: Color)] = [
+        ("Pink", Color(red: 0.95, green: 0.15, blue: 0.45)),
         ("Orange", Color(red: 1.0, green: 0.6, blue: 0.0)),
         ("Red", Color.red),
         ("Yellow", Color.yellow),
