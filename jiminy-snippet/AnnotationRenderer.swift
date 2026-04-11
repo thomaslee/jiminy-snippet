@@ -16,12 +16,6 @@ enum RenderConstants {
     static let textPaddingH: CGFloat = 4
     static let textPaddingV: CGFloat = 2
 
-    // Shadow parameters (shared between Canvas and export rendering)
-    static let shadowOffsetX: CGFloat = 1
-    static let shadowOffsetY: CGFloat = 1
-    static let shadowRadius: CGFloat = 1
-    static let shadowOpacity: Double = 0.5
-
     /// The text's measured size plus padding on all sides.
     static func paddedTextSize(_ measured: CGSize) -> CGSize {
         CGSize(
@@ -43,23 +37,71 @@ enum AnnotationRenderer {
 
     /// Draws an arrow with optional selection highlight. Pass `selected: true` to show selection chrome + handles.
     static func drawArrow(_ arrow: ArrowAnnotation, selected: Bool, in context: inout GraphicsContext) {
-        let path = arrowPath(start: arrow.start, end: arrow.end)
-        let style = StrokeStyle(lineWidth: arrow.lineWidth, lineCap: .round, lineJoin: .round)
-
-        if selected {
-            context.stroke(
-                path,
-                with: .color(.accentColor.opacity(0.4)),
-                style: StrokeStyle(lineWidth: arrow.lineWidth + 8, lineCap: .round, lineJoin: .round)
-            )
-        }
-
-        context.stroke(path, with: .color(arrow.color), style: style)
+        drawCartoonArrow(
+            start: arrow.start,
+            end: arrow.end,
+            color: arrow.color,
+            lineWidth: arrow.lineWidth,
+            selected: selected,
+            in: &context
+        )
 
         if selected {
             drawHandle(at: arrow.start, in: &context)
             drawHandle(at: arrow.end, in: &context)
         }
+    }
+
+    /// Draws a chunky, stylized "sticker" arrow: a filled polygon with a
+    /// contrasting outline. Used for both committed annotations and the
+    /// in-progress drag preview.
+    static func drawCartoonArrow(
+        start: CGPoint,
+        end: CGPoint,
+        color: Color,
+        lineWidth: CGFloat,
+        selected: Bool,
+        in context: inout GraphicsContext
+    ) {
+        let path = arrowPath(start: start, end: end, lineWidth: lineWidth)
+        guard !path.isEmpty else { return }
+
+        if selected {
+            context.stroke(
+                path,
+                with: .color(.accentColor.opacity(0.4)),
+                style: StrokeStyle(lineWidth: arrowOutlineWidth(for: lineWidth) + 8, lineJoin: .round)
+            )
+        }
+
+        context.fill(path, with: .color(color))
+        context.stroke(
+            path,
+            with: .color(arrowOutlineColor(for: color)),
+            style: StrokeStyle(
+                lineWidth: arrowOutlineWidth(for: lineWidth),
+                lineJoin: .miter,
+                miterLimit: 6
+            )
+        )
+    }
+
+    /// Width of the dark/light outline stroked around the arrow fill.
+    static func arrowOutlineWidth(for lineWidth: CGFloat) -> CGFloat {
+        max(1.5, lineWidth * 0.6)
+    }
+
+    /// Chooses a contrasting outline color for an arrow fill color so the
+    /// arrow reads crisply over any background — white for dark fills,
+    /// near-black for bright fills.
+    static func arrowOutlineColor(for color: Color) -> Color {
+        let resolved = NSColor(color).usingColorSpace(.sRGB) ?? NSColor.black
+        let luminance = 0.299 * resolved.redComponent
+                      + 0.587 * resolved.greenComponent
+                      + 0.114 * resolved.blueComponent
+        return luminance < 0.3
+            ? Color.white
+            : Color(red: 0.12, green: 0.12, blue: 0.16)
     }
 
     // MARK: - Text Drawing
@@ -78,6 +120,8 @@ enum AnnotationRenderer {
     }
 
     /// Draws a text annotation using pre-resolved text, applying scaleX/scaleY.
+    /// The text is rendered with a contrasting cartoon-style outline that
+    /// matches the arrow-annotation outline aesthetic.
     static func drawText(
         _ annotation: TextAnnotation,
         resolved: GraphicsContext.ResolvedText,
@@ -88,15 +132,43 @@ enum AnnotationRenderer {
             ctx.translateBy(x: annotation.position.x, y: annotation.position.y)
             ctx.rotate(by: .degrees(annotation.rotation))
             ctx.scaleBy(x: annotation.scaleX, y: annotation.scaleY)
-            ctx.addFilter(.shadow(
-                color: .black.opacity(RenderConstants.shadowOpacity),
-                radius: RenderConstants.shadowRadius,
-                x: RenderConstants.shadowOffsetX,
-                y: RenderConstants.shadowOffsetY
-            ))
+
             let origin = CGPoint(x: RenderConstants.textPaddingH, y: RenderConstants.textPaddingV)
+            let radius = textOutlineRadius(for: annotation.fontSize)
+
+            // SwiftUI Canvas can't stroke glyphs directly, so stamp a dark
+            // copy of the text at eight points on a circle around the origin
+            // to fake an outline, then draw the real fill on top.
+            let outlineText = Text(annotation.text.isEmpty ? " " : annotation.text)
+                .font(.system(size: annotation.fontSize, weight: .bold))
+                .foregroundStyle(arrowOutlineColor(for: annotation.color))
+            let resolvedOutline = ctx.resolve(outlineText)
+
+            let diag = radius * 0.7071
+            let offsets: [(CGFloat, CGFloat)] = [
+                ( radius,      0),
+                ( diag,     diag),
+                (     0,  radius),
+                (-diag,     diag),
+                (-radius,      0),
+                (-diag,    -diag),
+                (     0, -radius),
+                ( diag,    -diag),
+            ]
+            for (dx, dy) in offsets {
+                let p = CGPoint(x: origin.x + dx, y: origin.y + dy)
+                ctx.draw(resolvedOutline, in: CGRect(origin: p, size: size))
+            }
+
             ctx.draw(resolved, in: CGRect(origin: origin, size: size))
         }
+    }
+
+    /// Visible outline thickness around text glyphs, in points. Scales
+    /// gently with font size so larger text gets a proportionally chunkier
+    /// border.
+    static func textOutlineRadius(for fontSize: CGFloat) -> CGFloat {
+        max(1.5, fontSize * 0.08)
     }
 
     /// Draws selection chrome and handles for a text annotation.
@@ -270,41 +342,44 @@ enum AnnotationRenderer {
         return CGPoint(x: dx * cosA - dy * sinA, y: dx * sinA + dy * cosA)
     }
 
-    /// Builds a `Path` for an arrow (shaft + arrowhead wings).
-    static func arrowPath(start: CGPoint, end: CGPoint) -> Path {
+    /// Builds a closed filled-polygon `Path` for a cartoony sticker arrow:
+    /// a chunky shaft opening into a big triangular head. Proportions scale
+    /// with `lineWidth`. Returns an empty path for zero-length arrows.
+    static func arrowPath(start: CGPoint, end: CGPoint, lineWidth: CGFloat) -> Path {
         var path = Path()
-        path.move(to: start)
-        path.addLine(to: end)
-
-        if let wings = arrowHeadWings(tip: end, tail: start) {
-            path.move(to: wings.left)
-            path.addLine(to: end)
-            path.addLine(to: wings.right)
-        }
-        return path
-    }
-
-    // MARK: - Private
-
-    private static func arrowHeadWings(tip: CGPoint, tail: CGPoint) -> (left: CGPoint, right: CGPoint)? {
-        let dx = tip.x - tail.x
-        let dy = tip.y - tail.y
+        let dx = end.x - start.x
+        let dy = end.y - start.y
         let length = hypot(dx, dy)
-        guard length > 0 else { return nil }
+        guard length > 0 else { return path }
 
-        let angle = atan2(dy, dx)
-        let headLength = min(20, length * 0.3)
-        let headAngle: CGFloat = .pi / 6
+        // Proportions are tuned for a bold "sticker" look at lineWidth=4.
+        let w = lineWidth
+        let shaftHalf = w * 1.4                    // shaft thickness ≈ 2.8 × lineWidth
+        let headHalf = w * 3.2                     // head width     ≈ 6.4 × lineWidth
+        let headLen = min(w * 5.5, length * 0.85)  // clamp so short arrows stay arrow-shaped
+        let shaftLen = max(0, length - headLen)
 
-        return (
-            left: CGPoint(
-                x: tip.x - headLength * cos(angle - headAngle),
-                y: tip.y - headLength * sin(angle - headAngle)
-            ),
-            right: CGPoint(
-                x: tip.x - headLength * cos(angle + headAngle),
-                y: tip.y - headLength * sin(angle + headAngle)
+        let cosA = dx / length
+        let sinA = dy / length
+
+        // Map a point from arrow-local space (tail at origin, tip along +x)
+        // to canvas coordinates.
+        func transform(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(
+                x: start.x + x * cosA - y * sinA,
+                y: start.y + x * sinA + y * cosA
             )
-        )
+        }
+
+        // Polygon vertices, traced around the arrow outline.
+        path.move(to: transform(0, -shaftHalf))
+        path.addLine(to: transform(shaftLen, -shaftHalf))
+        path.addLine(to: transform(shaftLen, -headHalf))
+        path.addLine(to: transform(length, 0))
+        path.addLine(to: transform(shaftLen, headHalf))
+        path.addLine(to: transform(shaftLen, shaftHalf))
+        path.addLine(to: transform(0, shaftHalf))
+        path.closeSubpath()
+        return path
     }
 }

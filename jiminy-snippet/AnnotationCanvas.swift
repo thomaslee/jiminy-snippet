@@ -168,11 +168,13 @@ struct AnnotationCanvas: View {
             }
 
             if case .creatingArrow(let start, let end) = dragOperation {
-                let previewPath = AnnotationRenderer.arrowPath(start: start, end: end)
-                context.stroke(
-                    previewPath,
-                    with: .color(selectedColor),
-                    style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
+                AnnotationRenderer.drawCartoonArrow(
+                    start: start,
+                    end: end,
+                    color: selectedColor,
+                    lineWidth: ArrowAnnotation.defaultLineWidth,
+                    selected: false,
+                    in: &context
                 )
             }
 

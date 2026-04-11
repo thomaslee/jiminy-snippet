@@ -103,32 +103,45 @@ struct ImageExporter {
 
     private static func drawArrows(_ arrows: [ArrowAnnotation], in context: CGContext) {
         for arrow in arrows {
-            let cgPath = AnnotationRenderer.arrowPath(start: arrow.start, end: arrow.end).cgPath
-            context.setStrokeColor(NSColor(arrow.color).cgColor)
-            context.setLineWidth(arrow.lineWidth)
-            context.setLineCap(.round)
-            context.setLineJoin(.round)
+            let cgPath = AnnotationRenderer.arrowPath(
+                start: arrow.start, end: arrow.end, lineWidth: arrow.lineWidth
+            ).cgPath
+            let outlineColor = NSColor(AnnotationRenderer.arrowOutlineColor(for: arrow.color)).cgColor
+            let outlineWidth = AnnotationRenderer.arrowOutlineWidth(for: arrow.lineWidth)
+
+            context.saveGState()
             context.addPath(cgPath)
+            context.setFillColor(NSColor(arrow.color).cgColor)
+            context.fillPath()
+
+            context.addPath(cgPath)
+            context.setStrokeColor(outlineColor)
+            context.setLineWidth(outlineWidth)
+            context.setLineJoin(.miter)
+            context.setMiterLimit(6)
             context.strokePath()
+            context.restoreGState()
         }
     }
 
     private static func drawTexts(_ texts: [TextAnnotation], in context: CGContext) {
         for annotation in texts where !annotation.text.isEmpty {
             let font = RenderConstants.textFont(size: annotation.fontSize)
-
-            let shadow = NSShadow()
-            shadow.shadowOffset = NSSize(
-                width: RenderConstants.shadowOffsetX,
-                height: -RenderConstants.shadowOffsetY
+            let outlineColor = NSColor(
+                AnnotationRenderer.arrowOutlineColor(for: annotation.color)
             )
-            shadow.shadowBlurRadius = RenderConstants.shadowRadius
-            shadow.shadowColor = NSColor.black.withAlphaComponent(RenderConstants.shadowOpacity)
+
+            // `.strokeWidth` is a percentage of the font point size and is
+            // center-aligned on each glyph edge, so the visible outline is
+            // half the total stroke. A negative value both fills and strokes.
+            let visibleRadius = AnnotationRenderer.textOutlineRadius(for: annotation.fontSize)
+            let strokeWidth = -(2 * visibleRadius / annotation.fontSize * 100)
 
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: NSColor(annotation.color),
-                .shadow: shadow,
+                .strokeColor: outlineColor,
+                .strokeWidth: strokeWidth,
             ]
             let string = NSAttributedString(string: annotation.text, attributes: attrs)
 
@@ -136,7 +149,11 @@ struct ImageExporter {
             context.translateBy(x: annotation.position.x, y: annotation.position.y)
             context.rotate(by: annotation.rotation * .pi / 180)
             context.scaleBy(x: annotation.scaleX, y: annotation.scaleY)
-            string.draw(at: .zero)
+            let origin = CGPoint(
+                x: RenderConstants.textPaddingH,
+                y: RenderConstants.textPaddingV
+            )
+            string.draw(at: origin)
             context.restoreGState()
         }
     }

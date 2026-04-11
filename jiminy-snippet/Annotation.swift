@@ -27,11 +27,13 @@ enum AnnotationTool: String, CaseIterable {
 }
 
 struct ArrowAnnotation: Identifiable, Equatable {
+    static let defaultLineWidth: CGFloat = 4
+
     let id = UUID()
     var start: CGPoint
     var end: CGPoint
     var color: Color
-    var lineWidth: CGFloat = 4
+    var lineWidth: CGFloat = ArrowAnnotation.defaultLineWidth
 }
 
 struct TextAnnotation: Identifiable, Equatable {
