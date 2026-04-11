@@ -67,6 +67,7 @@ struct ContentView: View {
             markUnsaved()
             zoomToFit()
         }
+        .focusedSceneValue(\.copyScene, screenshotManager.capturedImage == nil ? nil : { copyToClipboard() })
     }
 
     private var emptyState: some View {

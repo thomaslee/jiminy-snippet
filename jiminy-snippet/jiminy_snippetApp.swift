@@ -19,6 +19,34 @@ struct jiminy_snippetApp: App {
                 .onAppear { appDelegate.screenshotManager = screenshotManager }
         }
         .defaultSize(width: 900, height: 700)
+        .commands {
+            CommandGroup(replacing: .pasteboard) {
+                CopySceneMenuItem()
+            }
+        }
+    }
+}
+
+private struct CopySceneMenuItem: View {
+    @FocusedValue(\.copyScene) private var copyScene
+
+    var body: some View {
+        Button("Copy") {
+            copyScene?()
+        }
+        .keyboardShortcut("c", modifiers: .command)
+        .disabled(copyScene == nil)
+    }
+}
+
+struct CopySceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+extension FocusedValues {
+    var copyScene: (() -> Void)? {
+        get { self[CopySceneActionKey.self] }
+        set { self[CopySceneActionKey.self] = newValue }
     }
 }
 
