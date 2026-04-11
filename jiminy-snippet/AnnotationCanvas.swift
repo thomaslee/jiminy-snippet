@@ -14,7 +14,9 @@ struct AnnotationCanvas: View {
     @Binding var selectedTool: AnnotationTool?
     @Binding var selectedAnnotationId: UUID?
     let selectedColor: Color
-    let scale: CGFloat
+    @Binding var scale: CGFloat
+    let minScale: CGFloat
+    let maxScale: CGFloat
     let cropMode: Bool
     @Binding var cropRect: CGRect?
     var onCropApply: () -> Void = {}
@@ -35,6 +37,11 @@ struct AnnotationCanvas: View {
     @State private var scrollPosition = ScrollPosition()
     @State private var viewportSize: CGSize = .zero
     @State private var scrollContentOffset: CGPoint = .zero
+
+    // Snapshot of `scale` taken at the start of a pinch-to-zoom gesture so
+    // each onChanged update can be computed from a stable base rather than
+    // compounding on the previous frame.
+    @State private var scaleAtPinchStart: CGFloat?
 
     private var imageSize: CGSize { image.size }
 
@@ -82,6 +89,7 @@ struct AnnotationCanvas: View {
             .onScrollGeometryChange(for: CGSize.self, of: { $0.containerSize }) { _, new in
                 viewportSize = new
             }
+            .simultaneousGesture(pinchZoomGesture)
         }
         .onChange(of: scale) { oldValue, newValue in
             recenterAfterZoom(from: oldValue, to: newValue)
@@ -634,6 +642,25 @@ struct AnnotationCanvas: View {
             paddedHeight: padded.height,
             initialRef: initialRef
         )
+    }
+
+    /// Trackpad pinch-to-zoom. Runs simultaneously with the drag/tap gestures
+    /// on the canvas so annotation editing is unaffected. Each `onChanged`
+    /// event is computed from the scale captured at gesture start, so the
+    /// cumulative magnification maps directly onto the user's pinch.
+    private var pinchZoomGesture: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                if scaleAtPinchStart == nil {
+                    scaleAtPinchStart = scale
+                }
+                let base = scaleAtPinchStart ?? scale
+                let target = base * value.magnification
+                scale = min(maxScale, max(minScale, target))
+            }
+            .onEnded { _ in
+                scaleAtPinchStart = nil
+            }
     }
 
     /// Keeps the point currently at the viewport centre pinned there across a
