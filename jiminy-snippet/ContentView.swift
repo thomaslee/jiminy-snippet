@@ -79,6 +79,8 @@ struct ContentView: View {
         }
         .focusedSceneValue(\.copyScene, screenshotManager.capturedImage == nil ? nil : { copyToClipboard() })
         .focusedSceneValue(\.pasteScene, { pasteFromClipboard() })
+        .focusedSceneValue(\.saveScene, screenshotManager.capturedImage == nil ? nil : { save() })
+        .focusedSceneValue(\.saveAsScene, screenshotManager.capturedImage == nil ? nil : { saveAs() })
         .focusedSceneValue(\.zoomInScene, screenshotManager.capturedImage == nil || scale >= maxScale ? nil : { zoomIn() })
         .focusedSceneValue(\.zoomOutScene, screenshotManager.capturedImage == nil || scale <= minScale ? nil : { zoomOut() })
         .focusedSceneValue(\.zoomToFitScene, screenshotManager.capturedImage == nil ? nil : { zoomToFit() })
@@ -123,12 +125,10 @@ struct ContentView: View {
     private var captureMenu: some View {
         Menu {
             Button("Fullscreen") {
-                clearAnnotations()
-                screenshotManager.captureFullscreen()
+                beginNewCapture { screenshotManager.captureFullscreen() }
             }
             Button("Screen snap...") {
-                clearAnnotations()
-                screenshotManager.captureRegion()
+                beginNewCapture { screenshotManager.captureRegion() }
             }
             Button("From Clipboard") {
                 pasteFromClipboard()
@@ -143,6 +143,31 @@ struct ContentView: View {
         .menuStyle(.borderedButton)
         .fixedSize()
         .help("Capture a new screenshot")
+    }
+
+    /// Prompts the user to discard unsaved changes (if any) and, on
+    /// confirmation, clears existing annotations and runs `capture`.
+    private func beginNewCapture(_ capture: () -> Void) {
+        guard confirmDiscardIfNeeded(
+            messageText: "You have unsaved changes",
+            informativeText: "Taking a new screenshot will discard your current edits. Continue?",
+            proceedButtonTitle: "Continue"
+        ) else { return }
+        clearAnnotations()
+        capture()
+    }
+
+    private func confirmDiscardIfNeeded(
+        messageText: String,
+        informativeText: String,
+        proceedButtonTitle: String
+    ) -> Bool {
+        guard screenshotManager.hasUnsavedChanges else { return true }
+        return ScreenshotManager.confirmDiscardUnsavedChanges(
+            messageText: messageText,
+            informativeText: informativeText,
+            proceedButtonTitle: proceedButtonTitle
+        )
     }
 
     private var toolPicker: some View {
@@ -237,10 +262,12 @@ struct ContentView: View {
 
     private var exportMenu: some View {
         Menu {
-            Button("Save As...") {
-                exportImage()
+            Button("Save") {
+                save()
             }
-            .keyboardShortcut("s", modifiers: [.command])
+            Button("Save As...") {
+                saveAs()
+            }
             Button("Copy to Clipboard") {
                 copyToClipboard()
             }
@@ -289,6 +316,11 @@ struct ContentView: View {
 
     private func pasteFromClipboard() {
         guard let image = NSImage(pasteboard: NSPasteboard.general) else { return }
+        guard confirmDiscardIfNeeded(
+            messageText: "You have unsaved changes",
+            informativeText: "Pasting from the clipboard will discard your current edits. Continue?",
+            proceedButtonTitle: "Continue"
+        ) else { return }
         clearAnnotations()
         screenshotManager.capturedImage = image
         // markUnsaved() and zoomToFit() are handled by onChange observers
@@ -306,7 +338,27 @@ struct ContentView: View {
         ImageExporter.copyToPasteboard(image: rendered)
     }
 
-    private func exportImage() {
+    private func save() {
+        if let url = screenshotManager.currentFileURL {
+            writeCurrentImage(to: url)
+        } else {
+            saveAs()
+        }
+    }
+
+    private func saveAs() {
+        guard screenshotManager.capturedImage != nil else { return }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = screenshotManager.currentFileURL?.lastPathComponent ?? "screenshot.png"
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        writeCurrentImage(to: url)
+    }
+
+    private func writeCurrentImage(to url: URL) {
         guard let image = screenshotManager.capturedImage else { return }
 
         let rendered = ImageExporter.render(
@@ -315,14 +367,8 @@ struct ContentView: View {
             texts: texts
         )
 
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = "screenshot.png"
-        panel.canCreateDirectories = true
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
         if ImageExporter.save(image: rendered, to: url) {
+            screenshotManager.currentFileURL = url
             screenshotManager.hasUnsavedChanges = false
         }
     }

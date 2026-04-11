@@ -20,6 +20,10 @@ struct jiminy_snippetApp: App {
         }
         .defaultSize(width: 900, height: 700)
         .commands {
+            CommandGroup(replacing: .saveItem) {
+                SaveSceneMenuItem()
+                SaveAsSceneMenuItem()
+            }
             CommandGroup(replacing: .pasteboard) {
                 CopySceneMenuItem()
                 PasteSceneMenuItem()
@@ -63,6 +67,30 @@ private struct ZoomMenuItems: View {
     }
 }
 
+private struct SaveSceneMenuItem: View {
+    @FocusedValue(\.saveScene) private var saveScene
+
+    var body: some View {
+        Button("Save") {
+            saveScene?()
+        }
+        .keyboardShortcut("s", modifiers: .command)
+        .disabled(saveScene == nil)
+    }
+}
+
+private struct SaveAsSceneMenuItem: View {
+    @FocusedValue(\.saveAsScene) private var saveAsScene
+
+    var body: some View {
+        Button("Save As...") {
+            saveAsScene?()
+        }
+        .keyboardShortcut("s", modifiers: [.command, .shift])
+        .disabled(saveAsScene == nil)
+    }
+}
+
 private struct CopySceneMenuItem: View {
     @FocusedValue(\.copyScene) private var copyScene
 
@@ -95,6 +123,14 @@ struct PasteSceneActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct SaveSceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct SaveAsSceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 struct ZoomInSceneActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
@@ -120,6 +156,16 @@ extension FocusedValues {
     var pasteScene: (() -> Void)? {
         get { self[PasteSceneActionKey.self] }
         set { self[PasteSceneActionKey.self] = newValue }
+    }
+
+    var saveScene: (() -> Void)? {
+        get { self[SaveSceneActionKey.self] }
+        set { self[SaveSceneActionKey.self] = newValue }
+    }
+
+    var saveAsScene: (() -> Void)? {
+        get { self[SaveAsSceneActionKey.self] }
+        set { self[SaveAsSceneActionKey.self] = newValue }
     }
 
     var zoomInScene: (() -> Void)? {
@@ -169,15 +215,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateNow
         }
 
-        let alert = NSAlert()
-        alert.messageText = "You have unsaved changes"
-        alert.informativeText = "Your screenshot has not been exported since the last edit. Quit anyway?"
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Quit")
-        alert.addButton(withTitle: "Cancel")
-
-        let response = alert.runModal()
-        return response == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+        let proceed = ScreenshotManager.confirmDiscardUnsavedChanges(
+            messageText: "You have unsaved changes",
+            informativeText: "Your screenshot has not been exported since the last edit. Quit anyway?",
+            proceedButtonTitle: "Quit"
+        )
+        return proceed ? .terminateNow : .terminateCancel
     }
 
     private func ensureWindowVisible() {

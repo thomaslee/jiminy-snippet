@@ -14,6 +14,27 @@ import ScreenCaptureKit
 final class ScreenshotManager {
     var capturedImage: NSImage?
     var hasUnsavedChanges = false
+    /// URL of the file backing the current screenshot, if it has been saved.
+    /// Reset to `nil` whenever a new image is loaded from a fresh source
+    /// (capture, paste) — but preserved through in-place edits like crop and
+    /// rotate so that Save can overwrite the existing file.
+    var currentFileURL: URL?
+
+    /// Presents a modal warning when there are unsaved changes and returns
+    /// whether the caller should proceed with the destructive action.
+    static func confirmDiscardUnsavedChanges(
+        messageText: String,
+        informativeText: String,
+        proceedButtonTitle: String
+    ) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = messageText
+        alert.informativeText = informativeText
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: proceedButtonTitle)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
 
     func captureFullscreen() {
         let visibleWindows = NSApplication.shared.windows.filter { $0.isVisible }
@@ -48,6 +69,7 @@ final class ScreenshotManager {
                     cgImage: cgImage,
                     size: NSSize(width: display.width, height: display.height)
                 )
+                self.currentFileURL = nil
             } catch {
                 print("Screenshot failed: \(error)")
             }
@@ -113,6 +135,7 @@ final class ScreenshotManager {
                         cgImage: cgImage,
                         size: NSSize(width: selectedRect.width, height: selectedRect.height)
                     )
+                    self.currentFileURL = nil
                 } catch {
                     print("Region capture failed: \(error)")
                 }
