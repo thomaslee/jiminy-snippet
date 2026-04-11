@@ -22,6 +22,7 @@ struct jiminy_snippetApp: App {
         .commands {
             CommandGroup(replacing: .pasteboard) {
                 CopySceneMenuItem()
+                PasteSceneMenuItem()
             }
         }
     }
@@ -39,7 +40,23 @@ private struct CopySceneMenuItem: View {
     }
 }
 
+private struct PasteSceneMenuItem: View {
+    @FocusedValue(\.pasteScene) private var pasteScene
+
+    var body: some View {
+        Button("Paste") {
+            pasteScene?()
+        }
+        .keyboardShortcut("v", modifiers: .command)
+        .disabled(pasteScene == nil)
+    }
+}
+
 struct CopySceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct PasteSceneActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
@@ -47,6 +64,11 @@ extension FocusedValues {
     var copyScene: (() -> Void)? {
         get { self[CopySceneActionKey.self] }
         set { self[CopySceneActionKey.self] = newValue }
+    }
+
+    var pasteScene: (() -> Void)? {
+        get { self[PasteSceneActionKey.self] }
+        set { self[PasteSceneActionKey.self] = newValue }
     }
 }
 

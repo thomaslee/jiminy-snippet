@@ -68,6 +68,7 @@ struct ContentView: View {
             zoomToFit()
         }
         .focusedSceneValue(\.copyScene, screenshotManager.capturedImage == nil ? nil : { copyToClipboard() })
+        .focusedSceneValue(\.pasteScene, { pasteFromClipboard() })
     }
 
     private var emptyState: some View {
@@ -113,6 +114,9 @@ struct ContentView: View {
             Button("Screen snap...") {
                 clearAnnotations()
                 screenshotManager.captureRegion()
+            }
+            Button("From Clipboard") {
+                pasteFromClipboard()
             }
             Button("Timed screen snap...") {
                 // Not implemented
@@ -281,6 +285,13 @@ struct ContentView: View {
     private func clearAnnotations() {
         arrows.removeAll()
         texts.removeAll()
+    }
+
+    private func pasteFromClipboard() {
+        guard let image = NSImage(pasteboard: NSPasteboard.general) else { return }
+        clearAnnotations()
+        screenshotManager.capturedImage = image
+        // markUnsaved() and zoomToFit() are handled by onChange observers
     }
 
     private func copyToClipboard() {
