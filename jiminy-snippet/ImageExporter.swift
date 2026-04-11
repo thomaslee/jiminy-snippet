@@ -164,23 +164,42 @@ struct ImageExporter {
     private static func drawTexts(_ texts: [TextAnnotation], in context: CGContext) {
         for annotation in texts where !annotation.text.isEmpty {
             let font = RenderConstants.textFont(size: annotation.fontSize)
+
+            // Resolve SwiftUI Colors to concrete sRGB NSColors up-front. The
+            // export CGContext has no NSAppearance, so dynamic colors bridged
+            // from SwiftUI can otherwise resolve unpredictably.
+            let foregroundColor = NSColor(annotation.color).usingColorSpace(.sRGB)
+                ?? NSColor(annotation.color)
             let outlineColor = NSColor(
                 AnnotationRenderer.arrowOutlineColor(for: annotation.color)
+            ).usingColorSpace(.sRGB) ?? .black
+
+            let fillString = NSAttributedString(
+                string: annotation.text,
+                attributes: [.font: font, .foregroundColor: foregroundColor]
+            )
+            let outlineString = NSAttributedString(
+                string: annotation.text,
+                attributes: [.font: font, .foregroundColor: outlineColor]
             )
 
-            // `.strokeWidth` is a percentage of the font point size and is
-            // center-aligned on each glyph edge, so the visible outline is
-            // half the total stroke. A negative value both fills and strokes.
-            let visibleRadius = AnnotationRenderer.textOutlineRadius(for: annotation.fontSize)
-            let strokeWidth = -(2 * visibleRadius / annotation.fontSize * 100)
-
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: font,
-                .foregroundColor: NSColor(annotation.color),
-                .strokeColor: outlineColor,
-                .strokeWidth: strokeWidth,
+            // Match the on-screen renderer: stamp the outline-colored text at
+            // eight points on a circle around the origin to fake a border,
+            // then draw the real fill on top. Using `.strokeWidth` on the
+            // attributed string looks correct on screen but produces a black
+            // glyph in this headless CGContext.
+            let radius = AnnotationRenderer.textOutlineRadius(for: annotation.fontSize)
+            let diag = radius * 0.7071
+            let offsets: [(CGFloat, CGFloat)] = [
+                ( radius,      0),
+                ( diag,     diag),
+                (     0,  radius),
+                (-diag,     diag),
+                (-radius,      0),
+                (-diag,    -diag),
+                (     0, -radius),
+                ( diag,    -diag),
             ]
-            let string = NSAttributedString(string: annotation.text, attributes: attrs)
 
             context.saveGState()
             context.translateBy(x: annotation.position.x, y: annotation.position.y)
@@ -190,7 +209,10 @@ struct ImageExporter {
                 x: RenderConstants.textPaddingH,
                 y: RenderConstants.textPaddingV
             )
-            string.draw(at: origin)
+            for (dx, dy) in offsets {
+                outlineString.draw(at: CGPoint(x: origin.x + dx, y: origin.y + dy))
+            }
+            fillString.draw(at: origin)
             context.restoreGState()
         }
     }
