@@ -67,6 +67,9 @@ struct ContentView: View {
             markUnsaved()
             zoomToFit()
         }
+        .onChange(of: selectedAnnotationId) {
+            syncPaletteToSelection()
+        }
         .focusedSceneValue(\.copyScene, screenshotManager.capturedImage == nil ? nil : { copyToClipboard() })
         .focusedSceneValue(\.pasteScene, { pasteFromClipboard() })
     }
@@ -280,6 +283,21 @@ struct ContentView: View {
         }
         .help("Undo last annotation")
         .disabled(arrows.isEmpty && texts.isEmpty)
+    }
+
+    private func syncPaletteToSelection() {
+        guard let id = selectedAnnotationId else { return }
+        let color: Color
+        if let arrow = arrows.first(where: { $0.id == id }) {
+            color = arrow.color
+        } else if let text = texts.first(where: { $0.id == id }) {
+            color = text.color
+        } else {
+            return
+        }
+        if let index = AnnotationPalette.colors.firstIndex(where: { $0.color == color }) {
+            selectedColorIndex = index
+        }
     }
 
     private func clearAnnotations() {
