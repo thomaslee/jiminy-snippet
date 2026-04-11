@@ -13,12 +13,16 @@ struct jiminy_snippetApp: App {
     @State private var screenshotManager = ScreenshotManager()
 
     var body: some Scene {
-        WindowGroup {
+        // Singleton editor window. `.defaultLaunchBehavior(.suppressed)`
+        // keeps it closed at launch so Jiminy lives silently in the menu bar
+        // until the user explicitly wants to see it.
+        Window("Jiminy Snippet", id: Self.mainWindowID) {
             ContentView()
                 .environment(screenshotManager)
                 .onAppear { appDelegate.screenshotManager = screenshotManager }
         }
         .defaultSize(width: 900, height: 700)
+        .defaultLaunchBehavior(.suppressed)
         .commands {
             CommandGroup(replacing: .saveItem) {
                 SaveSceneMenuItem()
@@ -39,6 +43,65 @@ struct jiminy_snippetApp: App {
                 Divider()
             }
         }
+
+        MenuBarExtra {
+            MenuBarCommands(mainWindowID: Self.mainWindowID)
+                .environment(screenshotManager)
+        } label: {
+            Image(systemName: "camera")
+        }
+    }
+
+    static let mainWindowID = "main"
+}
+
+/// Menu bar item content. Routes capture commands through
+/// `ScreenshotManager.pendingCaptureRequest`, opens the main editor window,
+/// and activates the app so the result is immediately visible.
+private struct MenuBarCommands: View {
+    let mainWindowID: String
+
+    @Environment(ScreenshotManager.self) private var screenshotManager
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Fullscreen") {
+            request(.fullscreen)
+        }
+        Button("Screen snap...") {
+            request(.region)
+        }
+        Button("From Clipboard") {
+            request(.fromClipboard)
+        }
+        Menu("Timed screen snap") {
+            ForEach([3, 5, 10], id: \.self) { seconds in
+                Button("\(seconds) Seconds") {
+                    request(.timed(seconds: seconds))
+                }
+            }
+        }
+        Divider()
+        Button("Show Jiminy") {
+            showMainWindow()
+        }
+        Divider()
+        Button("Quit Jiminy") {
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// Sets the pending request *before* opening the window so ContentView's
+    /// `.task` handler picks it up during its first appearance — otherwise
+    /// the value would race the view's initial mount.
+    private func request(_ capture: CaptureRequest) {
+        screenshotManager.pendingCaptureRequest = capture
+        showMainWindow()
+    }
+
+    private func showMainWindow() {
+        openWindow(id: mainWindowID)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
@@ -263,19 +326,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var screenshotManager: ScreenshotManager?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        DispatchQueue.main.async {
-            self.ensureWindowVisible()
-            NSApplication.shared.activate()
-        }
+        // Menu-bar-first experience: no Dock icon, no auto-raised window at
+        // launch. The user brings the editor window up explicitly via the
+        // menu bar item (Show Jiminy, or any of the capture commands).
+        NSApp.setActivationPolicy(.accessory)
     }
 
-    func applicationDidBecomeActive(_ notification: Notification) {
-        ensureWindowVisible()
-    }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        ensureWindowVisible()
-        return true
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // Closing the editor window must not quit the app — Jiminy has to
+        // stay alive in the menu bar so the user can capture again.
+        false
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -290,13 +350,5 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             proceedButtonTitle: "Quit"
         )
         return proceed ? .terminateNow : .terminateCancel
-    }
-
-    private func ensureWindowVisible() {
-        for window in NSApplication.shared.windows {
-            if window.canBecomeMain {
-                window.makeKeyAndOrderFront(nil)
-            }
-        }
     }
 }

@@ -46,6 +46,16 @@ struct ContentView: View {
             .onChange(of: selectedAnnotationId) {
                 syncPaletteToSelection()
             }
+            .task {
+                // Handles a request set by the menu bar *before* this view
+                // existed (i.e. the window was closed when the user clicked
+                // the menu bar item). .onChange below handles requests made
+                // while the window is already open.
+                handlePendingCaptureRequest()
+            }
+            .onChange(of: screenshotManager.pendingCaptureRequest) {
+                handlePendingCaptureRequest()
+            }
             .modifier(SceneCommandValues(
                 hasImage: screenshotManager.capturedImage != nil,
                 canZoomIn: scale < maxScale,
@@ -180,6 +190,28 @@ struct ContentView: View {
     /// Preset durations offered in the "Timed screen snap" submenu. 5 seconds
     /// is the default (first entry a user is likely to reach for).
     private var timedCaptureDurations: [Int] { [3, 5, 10] }
+
+    /// Consumes any pending capture request left by the menu bar item.
+    /// Dispatches through the same helpers the in-app capture menu uses, so
+    /// the unsaved-changes confirmation and annotation clearing logic stay in
+    /// a single place regardless of where the request originated.
+    private func handlePendingCaptureRequest() {
+        guard let request = screenshotManager.pendingCaptureRequest else { return }
+        screenshotManager.pendingCaptureRequest = nil
+
+        switch request {
+        case .fullscreen:
+            beginNewCapture { screenshotManager.captureFullscreen() }
+        case .region:
+            beginNewCapture { screenshotManager.captureRegion() }
+        case .timed(let seconds):
+            beginNewCapture {
+                screenshotManager.captureRegionAfterDelay(seconds: seconds)
+            }
+        case .fromClipboard:
+            pasteFromClipboard()
+        }
+    }
 
     /// Prompts the user to discard unsaved changes (if any) and, on
     /// confirmation, clears existing annotations and runs `capture`.

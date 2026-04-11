@@ -10,6 +10,18 @@ import Observation
 import ScreenCaptureKit
 import SwiftUI
 
+/// A capture action requested from outside ContentView (e.g. the menu bar
+/// item). ContentView watches `ScreenshotManager.pendingCaptureRequest` and
+/// dispatches these through its existing capture pipeline so the unsaved-
+/// changes confirmation, annotation clearing, and capture itself all stay in
+/// one place.
+enum CaptureRequest: Equatable {
+    case fullscreen
+    case region
+    case timed(seconds: Int)
+    case fromClipboard
+}
+
 @Observable
 @MainActor
 final class ScreenshotManager {
@@ -20,6 +32,13 @@ final class ScreenshotManager {
     /// (capture, paste) — but preserved through in-place edits like crop and
     /// rotate so that Save can overwrite the existing file.
     var currentFileURL: URL?
+
+    /// Out-of-band capture request, set by the menu bar item and consumed by
+    /// ContentView. Using a state field here (instead of calling capture
+    /// methods directly from the menu bar) lets ContentView apply its
+    /// existing unsaved-changes confirmation and annotation-clearing logic
+    /// uniformly across every capture code path.
+    var pendingCaptureRequest: CaptureRequest?
 
     // MARK: - Timed capture state
     //
