@@ -85,11 +85,9 @@ struct ImageExporter {
 
     @discardableResult
     static func copyToPasteboard(image: NSImage) -> Bool {
-        guard let pngData = pngData(from: image) else { return false }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setData(pngData, forType: .png)
-        return true
+        return pasteboard.writeObjects([image])
     }
 
     private static func pngData(from image: NSImage) -> Data? {
