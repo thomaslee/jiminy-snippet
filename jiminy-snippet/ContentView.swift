@@ -19,7 +19,6 @@ struct ContentView: View {
     @State private var arrows: [ArrowAnnotation] = []
     @State private var texts: [TextAnnotation] = []
     @State private var selectedAnnotationId: UUID? = nil
-    @State private var scaleText: String = "100"
     @State private var cropMode: Bool = false
     @State private var cropRect: CGRect? = nil
 
@@ -78,6 +77,10 @@ struct ContentView: View {
         }
         .focusedSceneValue(\.copyScene, screenshotManager.capturedImage == nil ? nil : { copyToClipboard() })
         .focusedSceneValue(\.pasteScene, { pasteFromClipboard() })
+        .focusedSceneValue(\.zoomInScene, screenshotManager.capturedImage == nil || scale >= maxScale ? nil : { zoomIn() })
+        .focusedSceneValue(\.zoomOutScene, screenshotManager.capturedImage == nil || scale <= minScale ? nil : { zoomOut() })
+        .focusedSceneValue(\.zoomToFitScene, screenshotManager.capturedImage == nil ? nil : { zoomToFit() })
+        .focusedSceneValue(\.zoomActualSizeScene, screenshotManager.capturedImage == nil ? nil : { zoomToActualSize() })
     }
 
     private var emptyState: some View {
@@ -103,8 +106,6 @@ struct ContentView: View {
                 toolPicker
                 Divider().frame(height: 24)
                 colorPicker
-                Divider().frame(height: 24)
-                scaleControls
                 Divider().frame(height: 24)
                 rotateControls
                 Divider().frame(height: 24)
@@ -156,91 +157,48 @@ struct ContentView: View {
     }
 
     private var colorPicker: some View {
-        HStack(spacing: 4) {
+        Menu {
             ForEach(Array(AnnotationPalette.colors.enumerated()), id: \.offset) { index, item in
                 Button {
-                    selectedColorIndex = index
-                    if let id = selectedAnnotationId {
-                        if let i = arrows.firstIndex(where: { $0.id == id }) {
-                            arrows[i].color = item.color
-                        } else if let i = texts.firstIndex(where: { $0.id == id }) {
-                            texts[i].color = item.color
-                        }
-                    }
+                    selectColor(at: index)
                 } label: {
-                    Circle()
-                        .fill(item.color)
-                        .frame(width: 20, height: 20)
-                        .overlay(
-                            Circle()
-                                .strokeBorder(
-                                    index == selectedColorIndex
-                                        ? Color.accentColor : Color.gray.opacity(0.3),
-                                    lineWidth: index == selectedColorIndex ? 2 : 1
-                                )
-                        )
+                    Image(nsImage: Self.swatchImage(for: item.color))
+                    Text(index == selectedColorIndex ? "✓" : " ")
                 }
-                .buttonStyle(.plain)
-                .help(item.name)
             }
+        } label: {
+            Image(nsImage: Self.swatchImage(for: selectedColor, size: 16))
         }
+        .menuStyle(.borderedButton)
+        .fixedSize()
+        .help("Annotation color: \(AnnotationPalette.colors[selectedColorIndex].name)")
     }
 
-    private static let scalePresets: [CGFloat] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]
+    private static func swatchImage(for color: Color, size: CGFloat = 14) -> NSImage {
+        let nsColor = NSColor(color)
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            let inset = rect.insetBy(dx: 1, dy: 1)
+            nsColor.setFill()
+            NSBezierPath(ovalIn: inset).fill()
+            NSColor.gray.withAlphaComponent(0.5).setStroke()
+            let stroke = NSBezierPath(ovalIn: inset)
+            stroke.lineWidth = 1
+            stroke.stroke()
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
 
-    private var scaleControls: some View {
-        HStack(spacing: 4) {
-            Button {
-                scale = max(minScale, scale - scaleStep)
-            } label: {
-                Image(systemName: "minus.magnifyingglass")
+    private func selectColor(at index: Int) {
+        selectedColorIndex = index
+        let color = AnnotationPalette.colors[index].color
+        if let id = selectedAnnotationId {
+            if let i = arrows.firstIndex(where: { $0.id == id }) {
+                arrows[i].color = color
+            } else if let i = texts.firstIndex(where: { $0.id == id }) {
+                texts[i].color = color
             }
-            .disabled(scale <= minScale)
-
-            HStack(spacing: 0) {
-                TextField("", text: $scaleText)
-                    .monospacedDigit()
-                    .frame(width: 40)
-                    .multilineTextAlignment(.trailing)
-                    .textFieldStyle(.plain)
-                    .onSubmit { applyScaleText() }
-
-                Text("%")
-                    .foregroundStyle(.secondary)
-
-                Menu {
-                    Button("Fit") { zoomToFit() }
-                    Divider()
-                    ForEach(Self.scalePresets, id: \.self) { preset in
-                        Button("\(Int(preset * 100))%") {
-                            scale = preset
-                        }
-                    }
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-            }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-            )
-            .onChange(of: scale) {
-                scaleText = "\(Int(scale * 100))"
-            }
-
-            Button {
-                scale = min(maxScale, scale + scaleStep)
-            } label: {
-                Image(systemName: "plus.magnifyingglass")
-            }
-            .disabled(scale >= maxScale)
         }
     }
 
@@ -364,12 +322,16 @@ struct ContentView: View {
         }
     }
 
-    private func applyScaleText() {
-        let cleaned = scaleText.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "%", with: "")
-        if let value = Double(cleaned) {
-            scale = clamp(CGFloat(value) / 100.0, min: minScale, max: maxScale)
-        }
-        scaleText = "\(Int(scale * 100))"
+    private func zoomIn() {
+        scale = min(maxScale, scale + scaleStep)
+    }
+
+    private func zoomOut() {
+        scale = max(minScale, scale - scaleStep)
+    }
+
+    private func zoomToActualSize() {
+        scale = 1.0
     }
 
     private func zoomToFit() {

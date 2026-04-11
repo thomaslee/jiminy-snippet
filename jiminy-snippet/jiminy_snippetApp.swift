@@ -24,7 +24,42 @@ struct jiminy_snippetApp: App {
                 CopySceneMenuItem()
                 PasteSceneMenuItem()
             }
+            CommandGroup(before: .toolbar) {
+                ZoomMenuItems()
+                Divider()
+            }
         }
+    }
+}
+
+private struct ZoomMenuItems: View {
+    @FocusedValue(\.zoomInScene) private var zoomIn
+    @FocusedValue(\.zoomOutScene) private var zoomOut
+    @FocusedValue(\.zoomToFitScene) private var zoomToFit
+    @FocusedValue(\.zoomActualSizeScene) private var zoomActualSize
+
+    var body: some View {
+        Button("Zoom In") {
+            zoomIn?()
+        }
+        .keyboardShortcut("=", modifiers: .command)
+        .disabled(zoomIn == nil)
+
+        Button("Zoom Out") {
+            zoomOut?()
+        }
+        .keyboardShortcut("-", modifiers: .command)
+        .disabled(zoomOut == nil)
+
+        Button("Zoom to Fit") {
+            zoomToFit?()
+        }
+        .disabled(zoomToFit == nil)
+
+        Button("Zoom to Actual Size") {
+            zoomActualSize?()
+        }
+        .disabled(zoomActualSize == nil)
     }
 }
 
@@ -60,6 +95,22 @@ struct PasteSceneActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct ZoomInSceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct ZoomOutSceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct ZoomToFitSceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct ZoomActualSizeSceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var copyScene: (() -> Void)? {
         get { self[CopySceneActionKey.self] }
@@ -69,6 +120,26 @@ extension FocusedValues {
     var pasteScene: (() -> Void)? {
         get { self[PasteSceneActionKey.self] }
         set { self[PasteSceneActionKey.self] = newValue }
+    }
+
+    var zoomInScene: (() -> Void)? {
+        get { self[ZoomInSceneActionKey.self] }
+        set { self[ZoomInSceneActionKey.self] = newValue }
+    }
+
+    var zoomOutScene: (() -> Void)? {
+        get { self[ZoomOutSceneActionKey.self] }
+        set { self[ZoomOutSceneActionKey.self] = newValue }
+    }
+
+    var zoomToFitScene: (() -> Void)? {
+        get { self[ZoomToFitSceneActionKey.self] }
+        set { self[ZoomToFitSceneActionKey.self] = newValue }
+    }
+
+    var zoomActualSizeScene: (() -> Void)? {
+        get { self[ZoomActualSizeSceneActionKey.self] }
+        set { self[ZoomActualSizeSceneActionKey.self] = newValue }
     }
 }
 
