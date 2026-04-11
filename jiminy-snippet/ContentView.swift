@@ -48,6 +48,7 @@ struct ContentView: View {
                 canZoomIn: scale < maxScale,
                 canZoomOut: scale > minScale,
                 canUndo: !undoHistory.isEmpty,
+                canDuplicate: selectedAnnotationId != nil,
                 copy: copyToClipboard,
                 paste: pasteFromClipboard,
                 save: save,
@@ -56,7 +57,8 @@ struct ContentView: View {
                 zoomOut: zoomOut,
                 zoomToFit: zoomToFit,
                 zoomActualSize: zoomToActualSize,
-                undo: undo
+                undo: undo,
+                duplicate: duplicateSelectedAnnotation
             ))
     }
 
@@ -359,6 +361,25 @@ struct ContentView: View {
         _ = undoHistory.pop()
     }
 
+    /// Duplicates the currently selected annotation, offsetting the copy so the
+    /// user can see it landed on top of the original. Selection moves to the
+    /// new copy so repeated invocations stack diagonally.
+    private func duplicateSelectedAnnotation() {
+        guard let id = selectedAnnotationId else { return }
+        let offset = CGSize(width: 20, height: 20)
+        if let arrow = arrows.first(where: { $0.id == id }) {
+            recordSnapshot()
+            let copy = arrow.duplicated(offset: offset)
+            arrows.append(copy)
+            selectedAnnotationId = copy.id
+        } else if let text = texts.first(where: { $0.id == id }) {
+            recordSnapshot()
+            let copy = text.duplicated(offset: offset)
+            texts.append(copy)
+            selectedAnnotationId = copy.id
+        }
+    }
+
     private func undo() {
         guard let snapshot = undoHistory.pop() else { return }
         arrows = snapshot.arrows
@@ -550,6 +571,7 @@ private struct SceneCommandValues: ViewModifier {
     let canZoomIn: Bool
     let canZoomOut: Bool
     let canUndo: Bool
+    let canDuplicate: Bool
     let copy: () -> Void
     let paste: () -> Void
     let save: () -> Void
@@ -559,12 +581,14 @@ private struct SceneCommandValues: ViewModifier {
     let zoomToFit: () -> Void
     let zoomActualSize: () -> Void
     let undo: () -> Void
+    let duplicate: () -> Void
 
     func body(content: Content) -> some View {
         content
             .modifier(fileAndClipboardValues)
             .modifier(zoomValues)
             .focusedSceneValue(\.undoScene, canUndo ? undo : nil)
+            .focusedSceneValue(\.duplicateScene, canDuplicate ? duplicate : nil)
     }
 
     private var fileAndClipboardValues: some ViewModifier {

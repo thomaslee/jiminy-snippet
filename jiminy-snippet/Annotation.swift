@@ -34,6 +34,17 @@ struct ArrowAnnotation: Identifiable, Equatable {
     var end: CGPoint
     var color: Color
     var lineWidth: CGFloat = ArrowAnnotation.defaultLineWidth
+
+    /// Returns a copy with a fresh id and both endpoints shifted by `offset`,
+    /// so the duplicate is visually distinguishable from the original.
+    func duplicated(offset: CGSize) -> ArrowAnnotation {
+        ArrowAnnotation(
+            start: CGPoint(x: start.x + offset.width, y: start.y + offset.height),
+            end: CGPoint(x: end.x + offset.width, y: end.y + offset.height),
+            color: color,
+            lineWidth: lineWidth
+        )
+    }
 }
 
 struct TextAnnotation: Identifiable, Equatable {
@@ -45,6 +56,20 @@ struct TextAnnotation: Identifiable, Equatable {
     var rotation: Double = 0
     var scaleX: CGFloat = 1
     var scaleY: CGFloat = 1
+
+    /// Returns a copy with a fresh id and position shifted by `offset`,
+    /// so the duplicate is visually distinguishable from the original.
+    func duplicated(offset: CGSize) -> TextAnnotation {
+        TextAnnotation(
+            position: CGPoint(x: position.x + offset.width, y: position.y + offset.height),
+            text: text,
+            color: color,
+            fontSize: fontSize,
+            rotation: rotation,
+            scaleX: scaleX,
+            scaleY: scaleY
+        )
+    }
 }
 
 extension NSImage {

@@ -30,6 +30,8 @@ struct jiminy_snippetApp: App {
             CommandGroup(replacing: .pasteboard) {
                 CopySceneMenuItem()
                 PasteSceneMenuItem()
+                Divider()
+                DuplicateSceneMenuItem()
             }
             CommandGroup(before: .toolbar) {
                 ZoomMenuItems()
@@ -130,6 +132,18 @@ private struct PasteSceneMenuItem: View {
     }
 }
 
+private struct DuplicateSceneMenuItem: View {
+    @FocusedValue(\.duplicateScene) private var duplicateScene
+
+    var body: some View {
+        Button("Duplicate") {
+            duplicateScene?()
+        }
+        .keyboardShortcut("d", modifiers: .command)
+        .disabled(duplicateScene == nil)
+    }
+}
+
 struct CopySceneActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
@@ -163,6 +177,10 @@ struct ZoomActualSizeSceneActionKey: FocusedValueKey {
 }
 
 struct UndoSceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct DuplicateSceneActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
@@ -210,6 +228,11 @@ extension FocusedValues {
     var undoScene: (() -> Void)? {
         get { self[UndoSceneActionKey.self] }
         set { self[UndoSceneActionKey.self] = newValue }
+    }
+
+    var duplicateScene: (() -> Void)? {
+        get { self[DuplicateSceneActionKey.self] }
+        set { self[DuplicateSceneActionKey.self] = newValue }
     }
 }
 
