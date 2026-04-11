@@ -50,20 +50,9 @@ struct AnnotationCanvas: View {
                     annotationCanvas
                     gestureLayer
 
-                    if editing != nil {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .frame(width: imageSize.width, height: imageSize.height)
-                            .onTapGesture {
-                                if let id = editing?.id {
-                                    commitTextEditing(id: id)
-                                }
-                            }
-                    }
-
                     if let editingId = editing?.id,
                        let annotation = texts.first(where: { $0.id == editingId }) {
-                        textFieldOverlay(for: annotation)
+                        editingOverlay(for: annotation, id: editingId)
                     }
                 }
                 .frame(width: imageSize.width, height: imageSize.height)
@@ -119,11 +108,8 @@ struct AnnotationCanvas: View {
     }
 
     private func deleteAnnotation(id: UUID) {
-        if let index = arrows.firstIndex(where: { $0.id == id }) {
-            arrows.remove(at: index)
-        } else if let index = texts.firstIndex(where: { $0.id == id }) {
-            texts.remove(at: index)
-        }
+        arrows.removeAll { $0.id == id }
+        texts.removeAll { $0.id == id }
         selectedAnnotationId = nil
     }
 
@@ -188,16 +174,25 @@ struct AnnotationCanvas: View {
             .allowsHitTesting(editing == nil)
     }
 
-    // MARK: - TextField Overlay
+    // MARK: - Editing Overlay
+
+    /// Tap-catcher (commits on outside tap) plus the in-place TextField, layered as one.
+    private func editingOverlay(for annotation: TextAnnotation, id: UUID) -> some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { commitTextEditing(id: id) }
+            textFieldOverlay(for: annotation)
+        }
+        .frame(width: imageSize.width, height: imageSize.height)
+    }
 
     private func textFieldOverlay(for annotation: TextAnnotation) -> some View {
         let annotationId = annotation.id
         let textBinding = Binding<String>(
             get: { texts.first(where: { $0.id == annotationId })?.text ?? "" },
             set: { newValue in
-                if let index = texts.firstIndex(where: { $0.id == annotationId }) {
-                    texts[index].text = newValue
-                }
+                texts.update(id: annotationId) { $0.text = newValue }
             }
         )
         return TextField("", text: textBinding)
@@ -233,176 +228,116 @@ struct AnnotationCanvas: View {
 
         switch dragOperation {
         case .none:
-            let startPoint = value.startLocation
-
-            if selectedTool == .arrow {
-                selectedAnnotationId = nil
-                dragOperation = .creatingArrow(start: startPoint, end: point)
-                return
-            }
-
-            if let hit = hitTest(at: startPoint) {
-                switch hit {
-                case .arrow(let id, let zone):
-                    selectedAnnotationId = id
-                    if let arrow = arrows.first(where: { $0.id == id }) {
-                        switch zone {
-                        case .startEndpoint:
-                            dragOperation = .movingArrowStart(id: id, initialStart: arrow.start)
-                        case .endEndpoint:
-                            dragOperation = .movingArrowEnd(id: id, initialEnd: arrow.end)
-                        case .body:
-                            dragOperation = .movingArrow(
-                                id: id, initialStart: arrow.start, initialEnd: arrow.end
-                            )
-                        default: break
-                        }
-                    }
-                case .text(let id, let zone):
-                    selectedAnnotationId = id
-                    if let annotation = texts.first(where: { $0.id == id }) {
-                        switch zone {
-                        case .handle(let handlePos):
-                            let size = textSizes[id] ?? .zero
-                            let padded = RenderConstants.paddedTextSize(size)
-                            let scaledSize = CGSize(
-                                width: padded.width * annotation.scaleX,
-                                height: padded.height * annotation.scaleY
-                            )
-                            let center = textCenter(for: annotation)
-
-                            if handleMode == .rotate {
-                                dragOperation = beginRotation(for: annotation, from: startPoint)
-                            } else {
-                                let axis: ScaleAxis
-                                let initialRef: CGFloat
-                                if handlePos.isCorner {
-                                    axis = .uniform
-                                    let handleLocal = handlePos.localPoint(scaledSize: scaledSize)
-                                    let handleCanvas = AnnotationRenderer.localToCanvas(
-                                        handleLocal, origin: annotation.position,
-                                        angle: annotation.rotation
-                                    )
-                                    initialRef = hypot(
-                                        handleCanvas.x - center.x,
-                                        handleCanvas.y - center.y
-                                    )
-                                } else if handlePos == .left || handlePos == .right {
-                                    axis = .horizontal
-                                    initialRef = padded.width * annotation.scaleX / 2
-                                } else {
-                                    axis = .vertical
-                                    initialRef = padded.height * annotation.scaleY / 2
-                                }
-                                dragOperation = .scalingText(
-                                    id: id,
-                                    axis: axis,
-                                    initialScaleX: annotation.scaleX,
-                                    initialScaleY: annotation.scaleY,
-                                    center: center,
-                                    paddedWidth: padded.width,
-                                    paddedHeight: padded.height,
-                                    initialRef: initialRef
-                                )
-                            }
-                        case .body:
-                            dragOperation = .movingText(id: id, initialPosition: annotation.position)
-                        case .exterior:
-                            if handleMode == .rotate {
-                                dragOperation = beginRotation(for: annotation, from: startPoint)
-                            }
-                        default: break
-                        }
-                    }
-                }
-            }
+            guard let op = beginDrag(at: value.startLocation) else { return }
+            dragOperation = op
+            // Re-enter so the current translation is applied immediately,
+            // rather than waiting one frame for the next drag event.
+            handleDragChanged(value)
 
         case .creatingArrow(let start, _):
             dragOperation = .creatingArrow(start: start, end: point)
 
-        case .movingArrow(let id, let initialStart, let initialEnd):
-            if let index = arrows.firstIndex(where: { $0.id == id }) {
-                arrows[index].start = CGPoint(
-                    x: initialStart.x + translation.width,
-                    y: initialStart.y + translation.height
-                )
-                arrows[index].end = CGPoint(
-                    x: initialEnd.x + translation.width,
-                    y: initialEnd.y + translation.height
-                )
-            }
-
-        case .movingArrowStart(let id, let initial):
-            if let index = arrows.firstIndex(where: { $0.id == id }) {
-                arrows[index].start = CGPoint(
-                    x: initial.x + translation.width,
-                    y: initial.y + translation.height
-                )
-            }
-
-        case .movingArrowEnd(let id, let initial):
-            if let index = arrows.firstIndex(where: { $0.id == id }) {
-                arrows[index].end = CGPoint(
-                    x: initial.x + translation.width,
-                    y: initial.y + translation.height
-                )
+        case .movingArrow(let id, let initialStart, let initialEnd, let mask):
+            arrows.update(id: id) { arrow in
+                if mask.contains(.start) { arrow.start = initialStart + translation }
+                if mask.contains(.end)   { arrow.end   = initialEnd + translation }
             }
 
         case .movingText(let id, let initial):
-            if let index = texts.firstIndex(where: { $0.id == id }) {
-                texts[index].position = CGPoint(
-                    x: initial.x + translation.width,
-                    y: initial.y + translation.height
-                )
-            }
+            texts.update(id: id) { $0.position = initial + translation }
 
         case .scalingText(let id, let axis, let initialScaleX, let initialScaleY,
                          let center, let paddedWidth, let paddedHeight, let initialRef):
-            guard initialRef > 0.001,
-                  let index = texts.firstIndex(where: { $0.id == id }) else { break }
-            let rad = texts[index].rotation * .pi / 180
-            var newSX = initialScaleX
-            var newSY = initialScaleY
+            guard initialRef > 0.001 else { break }
+            texts.update(id: id) { text in
+                let rad = text.rotation * .pi / 180
+                var newSX = initialScaleX
+                var newSY = initialScaleY
 
-            switch axis {
-            case .uniform:
-                let dist = hypot(point.x - center.x, point.y - center.y)
-                let factor = dist / initialRef
-                newSX = initialScaleX * factor
-                newSY = initialScaleY * factor
+                switch axis {
+                case .uniform:
+                    let dist = hypot(point.x - center.x, point.y - center.y)
+                    let factor = dist / initialRef
+                    newSX = initialScaleX * factor
+                    newSY = initialScaleY * factor
 
-            case .horizontal:
-                let axisX = cos(rad), axisY = sin(rad)
-                let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
-                newSX = initialScaleX * abs(proj) / initialRef
+                case .horizontal:
+                    let axisX = cos(rad), axisY = sin(rad)
+                    let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
+                    newSX = initialScaleX * abs(proj) / initialRef
 
-            case .vertical:
-                let axisX = -sin(rad), axisY = cos(rad)
-                let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
-                newSY = initialScaleY * abs(proj) / initialRef
+                case .vertical:
+                    let axisX = -sin(rad), axisY = cos(rad)
+                    let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
+                    newSY = initialScaleY * abs(proj) / initialRef
+                }
+
+                newSX = max(0.2, newSX)
+                newSY = max(0.2, newSY)
+                text.scaleX = newSX
+                text.scaleY = newSY
+
+                // Reposition so center stays fixed
+                let newLocalCenter = CGPoint(
+                    x: paddedWidth * newSX / 2,
+                    y: paddedHeight * newSY / 2
+                )
+                text.position = CGPoint(
+                    x: center.x - (newLocalCenter.x * cos(rad) - newLocalCenter.y * sin(rad)),
+                    y: center.y - (newLocalCenter.x * sin(rad) + newLocalCenter.y * cos(rad))
+                )
             }
 
-            newSX = max(0.2, newSX)
-            newSY = max(0.2, newSY)
-            texts[index].scaleX = newSX
-            texts[index].scaleY = newSY
-
-            // Reposition so center stays fixed
-            let newLocalCenter = CGPoint(
-                x: paddedWidth * newSX / 2,
-                y: paddedHeight * newSY / 2
-            )
-            texts[index].position = CGPoint(
-                x: center.x - (newLocalCenter.x * cos(rad) - newLocalCenter.y * sin(rad)),
-                y: center.y - (newLocalCenter.x * sin(rad) + newLocalCenter.y * cos(rad))
-            )
-
         case .rotatingText(let id, let initialRotation, let referenceAngle, let center):
-            if let index = texts.firstIndex(where: { $0.id == id }) {
-                let currentAngle = atan2(
-                    point.y - center.y, point.x - center.x
-                ) * 180 / .pi
-                texts[index].rotation = initialRotation + (currentAngle - referenceAngle)
+            texts.update(id: id) { text in
+                let currentAngle = atan2(point.y - center.y, point.x - center.x) * 180 / .pi
+                text.rotation = initialRotation + (currentAngle - referenceAngle)
+            }
+        }
+    }
+
+    /// Decides what kind of drag the user is starting at `startPoint`.
+    /// Mutates selection state as a side-effect, but only returns a `DragOperation`
+    /// when an actual drag should begin.
+    private func beginDrag(at startPoint: CGPoint) -> DragOperation? {
+        if selectedTool == .arrow {
+            selectedAnnotationId = nil
+            return .creatingArrow(start: startPoint, end: startPoint)
+        }
+
+        guard let hit = hitTest(at: startPoint) else { return nil }
+
+        switch hit {
+        case .arrow(let id, let zone):
+            selectedAnnotationId = id
+            guard let arrow = arrows.first(where: { $0.id == id }) else { return nil }
+            let mask: ArrowEndpointMask
+            switch zone {
+            case .startEndpoint: mask = .start
+            case .endEndpoint:   mask = .end
+            case .body:          mask = .both
+            default:             return nil
+            }
+            return .movingArrow(
+                id: id, initialStart: arrow.start, initialEnd: arrow.end, mask: mask
+            )
+
+        case .text(let id, let zone):
+            selectedAnnotationId = id
+            guard let annotation = texts.first(where: { $0.id == id }) else { return nil }
+            switch zone {
+            case .handle(let handlePos):
+                return handleMode == .rotate
+                    ? beginRotation(for: annotation, from: startPoint)
+                    : beginTextScaling(for: annotation, handle: handlePos)
+            case .body:
+                return .movingText(id: id, initialPosition: annotation.position)
+            case .exterior:
+                return handleMode == .rotate
+                    ? beginRotation(for: annotation, from: startPoint)
+                    : nil
+            default:
+                return nil
             }
         }
     }
@@ -525,10 +460,53 @@ struct AnnotationCanvas: View {
         )
     }
 
+    /// Builds a `scalingText` drag operation for the given handle.
+    /// Decides scaling axis (uniform/horizontal/vertical) and the reference distance
+    /// against which subsequent drag distances are normalised.
+    private func beginTextScaling(
+        for annotation: TextAnnotation,
+        handle handlePos: HandlePosition
+    ) -> DragOperation {
+        let measured = AnnotationRenderer.measureText(annotation)
+        let padded = RenderConstants.paddedTextSize(measured)
+        let scaledSize = CGSize(
+            width: padded.width * annotation.scaleX,
+            height: padded.height * annotation.scaleY
+        )
+        let center = textCenter(for: annotation)
+
+        let axis: ScaleAxis
+        let initialRef: CGFloat
+        if handlePos.isCorner {
+            axis = .uniform
+            let handleLocal = handlePos.localPoint(scaledSize: scaledSize)
+            let handleCanvas = AnnotationRenderer.localToCanvas(
+                handleLocal, origin: annotation.position, angle: annotation.rotation
+            )
+            initialRef = hypot(handleCanvas.x - center.x, handleCanvas.y - center.y)
+        } else if handlePos == .left || handlePos == .right {
+            axis = .horizontal
+            initialRef = padded.width * annotation.scaleX / 2
+        } else {
+            axis = .vertical
+            initialRef = padded.height * annotation.scaleY / 2
+        }
+
+        return .scalingText(
+            id: annotation.id,
+            axis: axis,
+            initialScaleX: annotation.scaleX,
+            initialScaleY: annotation.scaleY,
+            center: center,
+            paddedWidth: padded.width,
+            paddedHeight: padded.height,
+            initialRef: initialRef
+        )
+    }
+
     /// Returns the center of a text annotation's scaled bounding box in canvas space.
     private func textCenter(for annotation: TextAnnotation) -> CGPoint {
-        let size = textSizes[annotation.id] ?? .zero
-        let padded = RenderConstants.paddedTextSize(size)
+        let padded = RenderConstants.paddedTextSize(AnnotationRenderer.measureText(annotation))
         let localCenter = CGPoint(
             x: padded.width * annotation.scaleX / 2,
             y: padded.height * annotation.scaleY / 2
@@ -558,12 +536,18 @@ private enum ScaleAxis {
     case vertical   // top/bottom handles
 }
 
+/// Which endpoints of an arrow follow a translation drag.
+private struct ArrowEndpointMask: OptionSet {
+    let rawValue: Int
+    static let start = ArrowEndpointMask(rawValue: 1 << 0)
+    static let end   = ArrowEndpointMask(rawValue: 1 << 1)
+    static let both: ArrowEndpointMask = [.start, .end]
+}
+
 private enum DragOperation {
     case none
     case creatingArrow(start: CGPoint, end: CGPoint)
-    case movingArrow(id: UUID, initialStart: CGPoint, initialEnd: CGPoint)
-    case movingArrowStart(id: UUID, initialStart: CGPoint)
-    case movingArrowEnd(id: UUID, initialEnd: CGPoint)
+    case movingArrow(id: UUID, initialStart: CGPoint, initialEnd: CGPoint, mask: ArrowEndpointMask)
     case movingText(id: UUID, initialPosition: CGPoint)
     case scalingText(
         id: UUID,
@@ -576,4 +560,20 @@ private enum DragOperation {
         initialRef: CGFloat
     )
     case rotatingText(id: UUID, initialRotation: Double, referenceAngle: Double, center: CGPoint)
+}
+
+// MARK: - Helpers
+
+/// Translates a point by a SwiftUI gesture translation.
+private func + (point: CGPoint, translation: CGSize) -> CGPoint {
+    CGPoint(x: point.x + translation.width, y: point.y + translation.height)
+}
+
+private extension Array where Element: Identifiable {
+    /// Locates the element with the given id and applies an in-place mutation.
+    /// Does nothing if no matching element exists.
+    mutating func update(id: Element.ID, _ body: (inout Element) -> Void) {
+        guard let i = firstIndex(where: { $0.id == id }) else { return }
+        body(&self[i])
+    }
 }
