@@ -97,6 +97,7 @@ struct ContentView: View {
                 Divider().frame(height: 24)
                 rotateControls
                 Spacer()
+                copyButton
                 exportMenu
                 undoButton
             }
@@ -246,6 +247,16 @@ struct ContentView: View {
         }
     }
 
+    private var copyButton: some View {
+        Button {
+            copyToClipboard()
+        } label: {
+            Label("Copy", systemImage: "document.on.clipboard")
+        }
+        .help("Copy scene with annotations to clipboard")
+        .keyboardShortcut("c", modifiers: [.command, .shift])
+    }
+
     private var exportMenu: some View {
         Menu {
             Button("With Annotations") {
@@ -278,6 +289,19 @@ struct ContentView: View {
     private func clearAnnotations() {
         arrows.removeAll()
         texts.removeAll()
+    }
+
+    private func copyToClipboard() {
+        guard let image = screenshotManager.capturedImage else { return }
+
+        let rendered = ImageExporter.render(
+            image: image,
+            arrows: arrows,
+            texts: texts,
+            includeAnnotations: true
+        )
+
+        ImageExporter.copyToPasteboard(image: rendered)
     }
 
     private func exportImage(includeAnnotations: Bool) {
