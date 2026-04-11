@@ -26,6 +26,7 @@ struct jiminy_snippetApp: App {
             }
             CommandGroup(replacing: .undoRedo) {
                 UndoSceneMenuItem()
+                RedoSceneMenuItem()
             }
             CommandGroup(replacing: .pasteboard) {
                 CopySceneMenuItem()
@@ -50,6 +51,18 @@ private struct UndoSceneMenuItem: View {
         }
         .keyboardShortcut("z", modifiers: .command)
         .disabled(undoScene == nil)
+    }
+}
+
+private struct RedoSceneMenuItem: View {
+    @FocusedValue(\.redoScene) private var redoScene
+
+    var body: some View {
+        Button("Redo") {
+            redoScene?()
+        }
+        .keyboardShortcut("z", modifiers: [.command, .shift])
+        .disabled(redoScene == nil)
     }
 }
 
@@ -184,6 +197,10 @@ struct DuplicateSceneActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct RedoSceneActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var copyScene: (() -> Void)? {
         get { self[CopySceneActionKey.self] }
@@ -233,6 +250,11 @@ extension FocusedValues {
     var duplicateScene: (() -> Void)? {
         get { self[DuplicateSceneActionKey.self] }
         set { self[DuplicateSceneActionKey.self] = newValue }
+    }
+
+    var redoScene: (() -> Void)? {
+        get { self[RedoSceneActionKey.self] }
+        set { self[RedoSceneActionKey.self] = newValue }
     }
 }
 

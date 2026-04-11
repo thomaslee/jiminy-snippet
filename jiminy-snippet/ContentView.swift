@@ -47,7 +47,8 @@ struct ContentView: View {
                 hasImage: screenshotManager.capturedImage != nil,
                 canZoomIn: scale < maxScale,
                 canZoomOut: scale > minScale,
-                canUndo: !undoHistory.isEmpty,
+                canUndo: undoHistory.canUndo,
+                canRedo: undoHistory.canRedo,
                 canDuplicate: selectedAnnotationId != nil,
                 copy: copyToClipboard,
                 paste: pasteFromClipboard,
@@ -58,6 +59,7 @@ struct ContentView: View {
                 zoomToFit: zoomToFit,
                 zoomActualSize: zoomToActualSize,
                 undo: undo,
+                redo: redo,
                 duplicate: duplicateSelectedAnnotation
             ))
     }
@@ -319,7 +321,7 @@ struct ContentView: View {
             Image(systemName: "arrow.uturn.backward")
         }
         .help("Undo last edit")
-        .disabled(undoHistory.isEmpty)
+        .disabled(!undoHistory.canUndo)
     }
 
     private func syncPaletteToSelection() {
@@ -358,7 +360,7 @@ struct ContentView: View {
     /// abandoned (e.g. text editing is cancelled) so cancelled operations don't
     /// leave no-op entries on the stack.
     private func discardLastSnapshot() {
-        _ = undoHistory.pop()
+        undoHistory.discardLast()
     }
 
     /// Duplicates the currently selected annotation, offsetting the copy so the
@@ -381,7 +383,31 @@ struct ContentView: View {
     }
 
     private func undo() {
-        guard let snapshot = undoHistory.pop() else { return }
+        guard let current = currentEditSnapshot(),
+              let previous = undoHistory.popUndo(current: current)
+        else { return }
+        apply(snapshot: previous)
+    }
+
+    private func redo() {
+        guard let current = currentEditSnapshot(),
+              let next = undoHistory.popRedo(current: current)
+        else { return }
+        apply(snapshot: next)
+    }
+
+    /// Snapshot of the current editable state, used by undo/redo to stash the
+    /// "before" state onto the opposite stack. Returns nil if there's no image
+    /// loaded — in which case there's nothing to undo anyway.
+    private func currentEditSnapshot() -> EditSnapshot? {
+        guard let image = screenshotManager.capturedImage else { return nil }
+        return EditSnapshot(image: image, arrows: arrows, texts: texts)
+    }
+
+    /// Restores a snapshot produced by undo or redo. Clears selection and
+    /// exits crop mode because both become meaningless against the restored
+    /// state.
+    private func apply(snapshot: EditSnapshot) {
         arrows = snapshot.arrows
         texts = snapshot.texts
         if screenshotManager.capturedImage !== snapshot.image {
@@ -571,6 +597,7 @@ private struct SceneCommandValues: ViewModifier {
     let canZoomIn: Bool
     let canZoomOut: Bool
     let canUndo: Bool
+    let canRedo: Bool
     let canDuplicate: Bool
     let copy: () -> Void
     let paste: () -> Void
@@ -581,6 +608,7 @@ private struct SceneCommandValues: ViewModifier {
     let zoomToFit: () -> Void
     let zoomActualSize: () -> Void
     let undo: () -> Void
+    let redo: () -> Void
     let duplicate: () -> Void
 
     func body(content: Content) -> some View {
@@ -588,6 +616,7 @@ private struct SceneCommandValues: ViewModifier {
             .modifier(fileAndClipboardValues)
             .modifier(zoomValues)
             .focusedSceneValue(\.undoScene, canUndo ? undo : nil)
+            .focusedSceneValue(\.redoScene, canRedo ? redo : nil)
             .focusedSceneValue(\.duplicateScene, canDuplicate ? duplicate : nil)
     }
 
