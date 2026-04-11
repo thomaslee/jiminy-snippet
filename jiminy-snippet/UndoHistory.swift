@@ -13,6 +13,7 @@ struct EditSnapshot {
     let image: NSImage
     let arrows: [ArrowAnnotation]
     let texts: [TextAnnotation]
+    let rectangles: [RectangleAnnotation]
 }
 
 /// Fixed-capacity undo/redo history. Oldest undo snapshots are dropped once

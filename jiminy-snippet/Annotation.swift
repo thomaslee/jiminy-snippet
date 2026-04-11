@@ -10,11 +10,13 @@ import SwiftUI
 enum AnnotationTool: String, CaseIterable {
     case arrow = "Arrow"
     case text = "Text"
+    case rectangle = "Rectangle"
 
     var systemImage: String {
         switch self {
         case .arrow: "arrow.up.right"
         case .text: "textformat"
+        case .rectangle: "rectangle"
         }
     }
 
@@ -22,8 +24,15 @@ enum AnnotationTool: String, CaseIterable {
         switch self {
         case .arrow: "Draw an arrow"
         case .text: "Add a text label"
+        case .rectangle: "Draw a rectangle"
         }
     }
+}
+
+/// Whether a rectangle annotation renders as an outline or a solid fill.
+enum RectangleFillStyle: String, CaseIterable, Equatable {
+    case outlined
+    case filled
 }
 
 struct ArrowAnnotation: Identifiable, Equatable {
@@ -43,6 +52,30 @@ struct ArrowAnnotation: Identifiable, Equatable {
             end: CGPoint(x: end.x + offset.width, y: end.y + offset.height),
             color: color,
             lineWidth: lineWidth
+        )
+    }
+}
+
+struct RectangleAnnotation: Identifiable, Equatable {
+    static let defaultLineWidth: CGFloat = 4
+
+    let id = UUID()
+    /// May be non-standardized during an in-flight drag (negative width/height
+    /// if the user dragged past the opposite edge). Hit testing and rendering
+    /// both call `.standardized` so this is safe to store as-is.
+    var rect: CGRect
+    var color: Color
+    var lineWidth: CGFloat = RectangleAnnotation.defaultLineWidth
+    var style: RectangleFillStyle
+
+    /// Returns a copy with a fresh id and the rect shifted by `offset`, so the
+    /// duplicate is visually distinguishable from the original.
+    func duplicated(offset: CGSize) -> RectangleAnnotation {
+        RectangleAnnotation(
+            rect: rect.offsetBy(dx: offset.width, dy: offset.height),
+            color: color,
+            lineWidth: lineWidth,
+            style: style
         )
     }
 }

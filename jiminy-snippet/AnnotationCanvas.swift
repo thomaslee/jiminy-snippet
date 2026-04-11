@@ -11,9 +11,11 @@ struct AnnotationCanvas: View {
     let image: NSImage
     @Binding var arrows: [ArrowAnnotation]
     @Binding var texts: [TextAnnotation]
+    @Binding var rectangles: [RectangleAnnotation]
     @Binding var selectedTool: AnnotationTool?
     @Binding var selectedAnnotationId: UUID?
     let selectedColor: Color
+    let rectangleFillStyle: RectangleFillStyle
     @Binding var scale: CGFloat
     let minScale: CGFloat
     let maxScale: CGFloat
@@ -61,7 +63,7 @@ struct AnnotationCanvas: View {
 
     private func hitTest(at point: CGPoint) -> AnnotationHit? {
         hitTestAnnotations(
-            at: point, arrows: arrows, texts: texts,
+            at: point, arrows: arrows, texts: texts, rectangles: rectangles,
             selectedId: selectedAnnotationId, textSizes: textSizes
         )
     }
@@ -144,12 +146,16 @@ struct AnnotationCanvas: View {
     }
 
     private func deleteAnnotation(id: UUID) {
-        guard arrows.contains(where: { $0.id == id }) || texts.contains(where: { $0.id == id }) else {
+        guard arrows.contains(where: { $0.id == id })
+                || texts.contains(where: { $0.id == id })
+                || rectangles.contains(where: { $0.id == id })
+        else {
             return
         }
         onBeginEdit()
         arrows.removeAll { $0.id == id }
         texts.removeAll { $0.id == id }
+        rectangles.removeAll { $0.id == id }
         selectedAnnotationId = nil
     }
 
@@ -165,6 +171,11 @@ struct AnnotationCanvas: View {
             for arrow in arrows {
                 let selected = selectedAnnotationId == arrow.id
                 AnnotationRenderer.drawArrow(arrow, selected: selected, in: &context)
+            }
+
+            for rectangle in rectangles {
+                let selected = selectedAnnotationId == rectangle.id
+                AnnotationRenderer.drawRectangle(rectangle, selected: selected, in: &context)
             }
 
             for annotation in texts where annotation.id != editing?.id {
@@ -186,6 +197,20 @@ struct AnnotationCanvas: View {
                     selected: false,
                     in: &context
                 )
+            }
+
+            if case .creatingRectangle(let start, let end) = dragOperation {
+                let draft = RectangleAnnotation(
+                    rect: CGRect(
+                        x: min(start.x, end.x),
+                        y: min(start.y, end.y),
+                        width: abs(end.x - start.x),
+                        height: abs(end.y - start.y)
+                    ),
+                    color: selectedColor,
+                    style: rectangleFillStyle
+                )
+                AnnotationRenderer.drawRectangle(draft, selected: false, in: &context)
             }
 
             if cropMode {
@@ -394,6 +419,9 @@ struct AnnotationCanvas: View {
         case .creatingArrow(let start, _):
             dragOperation = .creatingArrow(start: start, end: point)
 
+        case .creatingRectangle(let start, _):
+            dragOperation = .creatingRectangle(start: start, end: point)
+
         case .croppingSelection(let start, _):
             dragOperation = .croppingSelection(start: start, end: point)
 
@@ -401,6 +429,16 @@ struct AnnotationCanvas: View {
             arrows.update(id: id) { arrow in
                 if mask.contains(.start) { arrow.start = initialStart + translation }
                 if mask.contains(.end)   { arrow.end   = initialEnd + translation }
+            }
+
+        case .movingRectangle(let id, let initial):
+            rectangles.update(id: id) {
+                $0.rect = initial.offsetBy(dx: translation.width, dy: translation.height)
+            }
+
+        case .resizingRectangle(let id, let initial, let handle):
+            rectangles.update(id: id) {
+                $0.rect = resizedRect(initial: initial, handle: handle, translation: translation)
             }
 
         case .movingText(let id, let initial):
@@ -469,6 +507,11 @@ struct AnnotationCanvas: View {
             return .creatingArrow(start: startPoint, end: startPoint)
         }
 
+        if selectedTool == .rectangle {
+            selectedAnnotationId = nil
+            return .creatingRectangle(start: startPoint, end: startPoint)
+        }
+
         guard let hit = hitTest(at: startPoint) else { return nil }
 
         switch hit {
@@ -503,6 +546,22 @@ struct AnnotationCanvas: View {
             default:
                 return nil
             }
+
+        case .rectangle(let id, let zone):
+            selectedAnnotationId = id
+            guard let rectangle = rectangles.first(where: { $0.id == id }) else { return nil }
+            switch zone {
+            case .body:
+                return .movingRectangle(id: id, initialRect: rectangle.rect)
+            case .handle(let handlePos):
+                return .resizingRectangle(
+                    id: id,
+                    initialRect: rectangle.rect.standardized,
+                    handle: handlePos
+                )
+            default:
+                return nil
+            }
         }
     }
 
@@ -512,6 +571,29 @@ struct AnnotationCanvas: View {
             let arrow = ArrowAnnotation(start: start, end: end, color: selectedColor)
             arrows.append(arrow)
             selectedTool = nil
+        } else if case .creatingRectangle(let start, _) = dragOperation {
+            let end = value.location
+            let rect = CGRect(
+                x: min(start.x, end.x),
+                y: min(start.y, end.y),
+                width: abs(end.x - start.x),
+                height: abs(end.y - start.y)
+            )
+            if rect.width > 1, rect.height > 1 {
+                let rectangle = RectangleAnnotation(
+                    rect: rect,
+                    color: selectedColor,
+                    style: rectangleFillStyle
+                )
+                rectangles.append(rectangle)
+                selectedAnnotationId = rectangle.id
+            }
+            selectedTool = nil
+        } else if case .resizingRectangle(let id, _, _) = dragOperation {
+            // Normalize at the end of a resize so flipped rects are stored
+            // with positive width/height. Hit testing already standardizes,
+            // but keeping the stored value tidy avoids surprises elsewhere.
+            rectangles.update(id: id) { $0.rect = $0.rect.standardized }
         } else if case .croppingSelection(let start, _) = dragOperation {
             let end = value.location
             let imageBounds = CGRect(origin: .zero, size: imageSize)
@@ -553,6 +635,7 @@ struct AnnotationCanvas: View {
         if let hit = hitTest(at: location) {
             switch hit {
             case .arrow(let id, _): selectedAnnotationId = id
+            case .rectangle(let id, _): selectedAnnotationId = id
             case .text(let id, _):
                 if id == selectedAnnotationId {
                     handleMode = handleMode == .resize ? .rotate : .resize
@@ -728,6 +811,37 @@ struct AnnotationCanvas: View {
         scrollPosition.scrollTo(point: newOffset)
     }
 
+    /// Computes the new rect produced by dragging a rectangle handle by
+    /// `translation`. The returned rect may be non-standardized (negative
+    /// width/height) while the user drags past the opposite edge — callers
+    /// standardize at the end of the drag.
+    private func resizedRect(
+        initial: CGRect,
+        handle: HandlePosition,
+        translation: CGSize
+    ) -> CGRect {
+        var minX = initial.minX
+        var minY = initial.minY
+        var maxX = initial.maxX
+        var maxY = initial.maxY
+
+        let dx = translation.width
+        let dy = translation.height
+
+        switch handle {
+        case .topLeft:     minX += dx; minY += dy
+        case .top:                     minY += dy
+        case .topRight:    maxX += dx; minY += dy
+        case .left:        minX += dx
+        case .right:       maxX += dx
+        case .bottomLeft:  minX += dx; maxY += dy
+        case .bottom:                  maxY += dy
+        case .bottomRight: maxX += dx; maxY += dy
+        }
+
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
     /// Returns the center of a text annotation's scaled bounding box in canvas space.
     private func textCenter(for annotation: TextAnnotation) -> CGPoint {
         let padded = RenderConstants.paddedTextSize(AnnotationRenderer.measureText(annotation))
@@ -771,8 +885,11 @@ private struct ArrowEndpointMask: OptionSet {
 private enum DragOperation {
     case none
     case creatingArrow(start: CGPoint, end: CGPoint)
+    case creatingRectangle(start: CGPoint, end: CGPoint)
     case croppingSelection(start: CGPoint, end: CGPoint)
     case movingArrow(id: UUID, initialStart: CGPoint, initialEnd: CGPoint, mask: ArrowEndpointMask)
+    case movingRectangle(id: UUID, initialRect: CGRect)
+    case resizingRectangle(id: UUID, initialRect: CGRect, handle: HandlePosition)
     case movingText(id: UUID, initialPosition: CGPoint)
     case scalingText(
         id: UUID,

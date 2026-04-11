@@ -45,19 +45,22 @@ enum HitZone {
     case handle(HandlePosition)
 }
 
-/// Result of a hit test — either an arrow or text annotation hit.
+/// Result of a hit test — either an arrow, text, or rectangle annotation hit.
 enum AnnotationHit {
     case arrow(id: UUID, zone: HitZone)
     case text(id: UUID, zone: HitZone)
+    case rectangle(id: UUID, zone: HitZone)
 }
 
 /// Hit-tests a point against all annotations.
-/// Checks texts first (topmost), then arrows, both in reverse order.
+/// Checks texts first, then rectangles, then arrows — all in reverse order so
+/// the topmost (most recently added) annotation wins.
 /// Endpoint/resize handles are only hit-testable when the annotation is selected.
 func hitTestAnnotations(
     at point: CGPoint,
     arrows: [ArrowAnnotation],
     texts: [TextAnnotation],
+    rectangles: [RectangleAnnotation],
     selectedId: UUID?,
     textSizes: [UUID: CGSize]
 ) -> AnnotationHit? {
@@ -96,6 +99,45 @@ func hitTestAnnotations(
             let expandedRect = localRect.insetBy(dx: -margin, dy: -margin)
             if expandedRect.contains(localPoint) {
                 return .text(id: annotation.id, zone: .exterior)
+            }
+        }
+    }
+
+    // Check rectangles in reverse
+    for rectangle in rectangles.reversed() {
+        let bounds = rectangle.rect.standardized
+        guard bounds.width > 0, bounds.height > 0 else { continue }
+
+        // Check handles first (only if selected)
+        if rectangle.id == selectedId {
+            for pos in HandlePosition.allCases {
+                let local = pos.localPoint(scaledSize: bounds.size)
+                let handlePoint = CGPoint(x: bounds.minX + local.x, y: bounds.minY + local.y)
+                if distance(point, handlePoint) < RenderConstants.handleHitRadius {
+                    return .rectangle(id: rectangle.id, zone: .handle(pos))
+                }
+            }
+        }
+
+        // Check body. Filled rectangles are hit anywhere inside the bounds;
+        // outlined rectangles are hit only within a narrow band around the
+        // stroke so the user can click through to annotations sitting
+        // "behind" an empty rectangle.
+        switch rectangle.style {
+        case .filled:
+            if bounds.contains(point) {
+                return .rectangle(id: rectangle.id, zone: .body)
+            }
+        case .outlined:
+            let tolerance = max(8, rectangle.lineWidth * 2.5 / 2 + 4)
+            let outer = bounds.insetBy(dx: -tolerance, dy: -tolerance)
+            let inner = bounds.insetBy(dx: tolerance, dy: tolerance)
+            // inner.isNull when the rectangle is narrower than 2×tolerance —
+            // treat tiny outlined rectangles as fully hit-testable so they
+            // don't become impossible to grab.
+            let innerHit = inner.isNull ? false : inner.contains(point)
+            if outer.contains(point), !innerHit {
+                return .rectangle(id: rectangle.id, zone: .body)
             }
         }
     }

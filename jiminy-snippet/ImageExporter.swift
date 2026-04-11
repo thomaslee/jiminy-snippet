@@ -13,7 +13,8 @@ struct ImageExporter {
     static func render(
         image: NSImage,
         arrows: [ArrowAnnotation],
-        texts: [TextAnnotation]
+        texts: [TextAnnotation],
+        rectangles: [RectangleAnnotation]
     ) -> NSImage {
         let pointSize = image.size
         let pixelSize = pixelSize(of: image) ?? pointSize
@@ -49,6 +50,7 @@ struct ImageExporter {
         NSGraphicsContext.current = nsContext
 
         drawArrows(arrows, in: context)
+        drawRectangles(rectangles, in: context)
         drawTexts(texts, in: context)
 
         NSGraphicsContext.restoreGraphicsState()
@@ -120,6 +122,41 @@ struct ImageExporter {
             context.setLineJoin(.miter)
             context.setMiterLimit(6)
             context.strokePath()
+            context.restoreGState()
+        }
+    }
+
+    private static func drawRectangles(_ rectangles: [RectangleAnnotation], in context: CGContext) {
+        for rectangle in rectangles {
+            let bounds = rectangle.rect.standardized
+            guard bounds.width > 0, bounds.height > 0 else { continue }
+
+            let fillColor = NSColor(rectangle.color).cgColor
+            let outlineColor = NSColor(
+                AnnotationRenderer.arrowOutlineColor(for: rectangle.color)
+            ).cgColor
+            let outlineWidth = AnnotationRenderer.arrowOutlineWidth(for: rectangle.lineWidth)
+
+            context.saveGState()
+            context.setLineJoin(.miter)
+
+            switch rectangle.style {
+            case .filled:
+                context.setFillColor(fillColor)
+                context.fill(bounds)
+                context.setStrokeColor(outlineColor)
+                context.setLineWidth(outlineWidth)
+                context.stroke(bounds)
+            case .outlined:
+                let strokeW = rectangle.lineWidth * 2.5
+                context.setStrokeColor(outlineColor)
+                context.setLineWidth(strokeW + outlineWidth * 2)
+                context.stroke(bounds)
+                context.setStrokeColor(fillColor)
+                context.setLineWidth(strokeW)
+                context.stroke(bounds)
+            }
+
             context.restoreGState()
         }
     }

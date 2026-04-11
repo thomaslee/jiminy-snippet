@@ -104,6 +104,82 @@ enum AnnotationRenderer {
             : Color(red: 0.12, green: 0.12, blue: 0.16)
     }
 
+    // MARK: - Rectangle Drawing
+
+    /// Draws a rectangle annotation with optional selection chrome. Outlined
+    /// rectangles use a chunky double-stroke (contrast outline + color fill
+    /// stroke) that matches the arrow body's visual weight; filled rectangles
+    /// fill the interior and stroke a thin contrast border around the edge.
+    static func drawRectangle(
+        _ rectangle: RectangleAnnotation,
+        selected: Bool,
+        in context: inout GraphicsContext
+    ) {
+        let bounds = rectangle.rect.standardized
+        guard bounds.width > 0, bounds.height > 0 else { return }
+
+        let path = Path(bounds)
+        let outlineColor = arrowOutlineColor(for: rectangle.color)
+        let outlineW = arrowOutlineWidth(for: rectangle.lineWidth)
+
+        if selected {
+            // Accent-color glow, drawn first so it sits behind the body.
+            let totalVisible: CGFloat
+            switch rectangle.style {
+            case .outlined:
+                totalVisible = rectangle.lineWidth * 2.5 + outlineW * 2
+            case .filled:
+                totalVisible = outlineW
+            }
+            context.stroke(
+                path,
+                with: .color(.accentColor.opacity(0.4)),
+                style: StrokeStyle(lineWidth: totalVisible + 8, lineJoin: .miter)
+            )
+        }
+
+        switch rectangle.style {
+        case .outlined:
+            let strokeW = rectangle.lineWidth * 2.5
+            context.stroke(
+                path,
+                with: .color(outlineColor),
+                style: StrokeStyle(lineWidth: strokeW + outlineW * 2, lineJoin: .miter)
+            )
+            context.stroke(
+                path,
+                with: .color(rectangle.color),
+                style: StrokeStyle(lineWidth: strokeW, lineJoin: .miter)
+            )
+        case .filled:
+            context.fill(path, with: .color(rectangle.color))
+            context.stroke(
+                path,
+                with: .color(outlineColor),
+                style: StrokeStyle(lineWidth: outlineW, lineJoin: .miter)
+            )
+        }
+
+        if selected {
+            drawRectangleResizeHandles(bounds: bounds, in: &context)
+        }
+    }
+
+    /// Draws the eight L-bracket corner + side-tick handles around a
+    /// rectangle. Reuses the same helpers text selection uses — just
+    /// translated to the rectangle's origin instead of the text origin.
+    private static func drawRectangleResizeHandles(
+        bounds: CGRect,
+        in context: inout GraphicsContext
+    ) {
+        let arm = RenderConstants.handleArmLength
+        context.drawLayer { ctx in
+            ctx.translateBy(x: bounds.minX, y: bounds.minY)
+            drawResizeCorners(w: bounds.width, h: bounds.height, arm: arm, in: &ctx)
+            drawResizeSideTicks(w: bounds.width, h: bounds.height, in: &ctx)
+        }
+    }
+
     // MARK: - Text Drawing
 
     /// Resolves and measures a text annotation. Call once, then pass results to `drawText` and `drawTextSelection`.

@@ -18,6 +18,8 @@ struct ContentView: View {
 
     @State private var arrows: [ArrowAnnotation] = []
     @State private var texts: [TextAnnotation] = []
+    @State private var rectangles: [RectangleAnnotation] = []
+    @State private var rectangleFillStyle: RectangleFillStyle = .outlined
     @State private var selectedAnnotationId: UUID? = nil
     @State private var cropMode: Bool = false
     @State private var cropRect: CGRect? = nil
@@ -36,6 +38,7 @@ struct ContentView: View {
             .frame(minWidth: 800, minHeight: 600)
             .onChange(of: arrows) { markUnsaved() }
             .onChange(of: texts) { markUnsaved() }
+            .onChange(of: rectangles) { markUnsaved() }
             .onChange(of: screenshotManager.capturedImage) {
                 markUnsaved()
                 zoomToFit()
@@ -78,9 +81,11 @@ struct ContentView: View {
                     image: image,
                     arrows: $arrows,
                     texts: $texts,
+                    rectangles: $rectangles,
                     selectedTool: $selectedTool,
                     selectedAnnotationId: $selectedAnnotationId,
                     selectedColor: selectedColor,
+                    rectangleFillStyle: rectangleFillStyle,
                     scale: $scale,
                     minScale: minScale,
                     maxScale: maxScale,
@@ -129,6 +134,10 @@ struct ContentView: View {
                 toolPicker
                 Divider().frame(height: 24)
                 colorPicker
+                if isRectangleContextActive {
+                    Divider().frame(height: 24)
+                    rectangleStyleControls
+                }
                 Divider().frame(height: 24)
                 rotateControls
                 Divider().frame(height: 24)
@@ -262,7 +271,55 @@ struct ContentView: View {
             guard texts[i].color != color else { return }
             recordSnapshot()
             texts[i].color = color
+        } else if let i = rectangles.firstIndex(where: { $0.id == id }) {
+            guard rectangles[i].color != color else { return }
+            recordSnapshot()
+            rectangles[i].color = color
         }
+    }
+
+    /// Whether the rectangle style toggle should be visible — either the
+    /// rectangle tool is selected (so the choice affects the next draw) or a
+    /// rectangle annotation is currently selected (so the choice edits it in
+    /// place).
+    private var isRectangleContextActive: Bool {
+        if selectedTool == .rectangle { return true }
+        guard let id = selectedAnnotationId else { return false }
+        return rectangles.contains(where: { $0.id == id })
+    }
+
+    private var rectangleStyleControls: some View {
+        HStack(spacing: 4) {
+            Button {
+                setRectangleFillStyle(.outlined)
+            } label: {
+                Image(systemName: "rectangle")
+            }
+            .buttonStyle(.bordered)
+            .tint(rectangleFillStyle == .outlined ? .accentColor : nil)
+            .help("Outlined rectangle")
+
+            Button {
+                setRectangleFillStyle(.filled)
+            } label: {
+                Image(systemName: "rectangle.fill")
+            }
+            .buttonStyle(.bordered)
+            .tint(rectangleFillStyle == .filled ? .accentColor : nil)
+            .help("Filled rectangle")
+        }
+    }
+
+    /// Picks a fill style for future rectangle draws and, if a rectangle is
+    /// currently selected, applies the style to it in place (undoable).
+    private func setRectangleFillStyle(_ style: RectangleFillStyle) {
+        rectangleFillStyle = style
+        guard let id = selectedAnnotationId,
+              let i = rectangles.firstIndex(where: { $0.id == id }),
+              rectangles[i].style != style
+        else { return }
+        recordSnapshot()
+        rectangles[i].style = style
     }
 
     private var rotateControls: some View {
@@ -331,6 +388,10 @@ struct ContentView: View {
             color = arrow.color
         } else if let text = texts.first(where: { $0.id == id }) {
             color = text.color
+        } else if let rectangle = rectangles.first(where: { $0.id == id }) {
+            color = rectangle.color
+            // Sync the style toggle so the toolbar reflects the selection.
+            rectangleFillStyle = rectangle.style
         } else {
             return
         }
@@ -342,6 +403,7 @@ struct ContentView: View {
     private func clearAnnotations() {
         arrows.removeAll()
         texts.removeAll()
+        rectangles.removeAll()
         undoHistory.clear()
     }
 
@@ -352,7 +414,7 @@ struct ContentView: View {
     private func recordSnapshot() {
         guard let image = screenshotManager.capturedImage else { return }
         undoHistory.push(
-            EditSnapshot(image: image, arrows: arrows, texts: texts)
+            EditSnapshot(image: image, arrows: arrows, texts: texts, rectangles: rectangles)
         )
     }
 
@@ -379,6 +441,11 @@ struct ContentView: View {
             let copy = text.duplicated(offset: offset)
             texts.append(copy)
             selectedAnnotationId = copy.id
+        } else if let rectangle = rectangles.first(where: { $0.id == id }) {
+            recordSnapshot()
+            let copy = rectangle.duplicated(offset: offset)
+            rectangles.append(copy)
+            selectedAnnotationId = copy.id
         }
     }
 
@@ -401,7 +468,9 @@ struct ContentView: View {
     /// loaded — in which case there's nothing to undo anyway.
     private func currentEditSnapshot() -> EditSnapshot? {
         guard let image = screenshotManager.capturedImage else { return nil }
-        return EditSnapshot(image: image, arrows: arrows, texts: texts)
+        return EditSnapshot(
+            image: image, arrows: arrows, texts: texts, rectangles: rectangles
+        )
     }
 
     /// Restores a snapshot produced by undo or redo. Clears selection and
@@ -410,6 +479,7 @@ struct ContentView: View {
     private func apply(snapshot: EditSnapshot) {
         arrows = snapshot.arrows
         texts = snapshot.texts
+        rectangles = snapshot.rectangles
         if screenshotManager.capturedImage !== snapshot.image {
             screenshotManager.capturedImage = snapshot.image
         }
@@ -437,7 +507,8 @@ struct ContentView: View {
         let rendered = ImageExporter.render(
             image: image,
             arrows: arrows,
-            texts: texts
+            texts: texts,
+            rectangles: rectangles
         )
 
         ImageExporter.copyToPasteboard(image: rendered)
@@ -469,7 +540,8 @@ struct ContentView: View {
         let rendered = ImageExporter.render(
             image: image,
             arrows: arrows,
-            texts: texts
+            texts: texts,
+            rectangles: rectangles
         )
 
         if ImageExporter.save(image: rendered, to: url) {
@@ -545,6 +617,9 @@ struct ContentView: View {
             texts[i].position.x += dx
             texts[i].position.y += dy
         }
+        for i in rectangles.indices {
+            rectangles[i].rect = rectangles[i].rect.offsetBy(dx: dx, dy: dy)
+        }
 
         selectedAnnotationId = nil
         screenshotManager.capturedImage = cropped
@@ -568,6 +643,23 @@ struct ContentView: View {
         for i in texts.indices {
             texts[i].position = rotatePoint(texts[i].position, imageWidth: w, imageHeight: h, clockwise: clockwise)
             texts[i].rotation += clockwise ? 90 : -90
+        }
+        for i in rectangles.indices {
+            let standardized = rectangles[i].rect.standardized
+            let p1 = rotatePoint(
+                CGPoint(x: standardized.minX, y: standardized.minY),
+                imageWidth: w, imageHeight: h, clockwise: clockwise
+            )
+            let p2 = rotatePoint(
+                CGPoint(x: standardized.maxX, y: standardized.maxY),
+                imageWidth: w, imageHeight: h, clockwise: clockwise
+            )
+            rectangles[i].rect = CGRect(
+                x: min(p1.x, p2.x),
+                y: min(p1.y, p2.y),
+                width: abs(p2.x - p1.x),
+                height: abs(p2.y - p1.y)
+            )
         }
 
         selectedAnnotationId = nil
