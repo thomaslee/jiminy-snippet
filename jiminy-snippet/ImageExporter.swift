@@ -13,8 +13,7 @@ struct ImageExporter {
     static func render(
         image: NSImage,
         arrows: [ArrowAnnotation],
-        texts: [TextAnnotation],
-        includeAnnotations: Bool
+        texts: [TextAnnotation]
     ) -> NSImage {
         let pointSize = image.size
         let pixelSize = pixelSize(of: image) ?? pointSize
@@ -36,25 +35,23 @@ struct ImageExporter {
         // Draw the source image at full pixel resolution.
         context.draw(cgImage, in: CGRect(origin: .zero, size: pixelSize))
 
-        if includeAnnotations {
-            // Switch to a flipped (top-left origin) point-space coordinate system
-            // so annotations authored in SwiftUI point-space render correctly and
-            // at the bitmap's full pixel resolution.
-            context.translateBy(x: 0, y: pixelSize.height)
-            context.scaleBy(
-                x: pixelSize.width / pointSize.width,
-                y: -pixelSize.height / pointSize.height
-            )
+        // Switch to a flipped (top-left origin) point-space coordinate system
+        // so annotations authored in SwiftUI point-space render correctly and
+        // at the bitmap's full pixel resolution.
+        context.translateBy(x: 0, y: pixelSize.height)
+        context.scaleBy(
+            x: pixelSize.width / pointSize.width,
+            y: -pixelSize.height / pointSize.height
+        )
 
-            let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = nsContext
+        let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = nsContext
 
-            drawArrows(arrows, in: context)
-            drawTexts(texts, in: context)
+        drawArrows(arrows, in: context)
+        drawTexts(texts, in: context)
 
-            NSGraphicsContext.restoreGraphicsState()
-        }
+        NSGraphicsContext.restoreGraphicsState()
 
         guard let outputCGImage = context.makeImage() else {
             return image

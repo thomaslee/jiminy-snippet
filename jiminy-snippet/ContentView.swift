@@ -97,7 +97,6 @@ struct ContentView: View {
                 Divider().frame(height: 24)
                 rotateControls
                 Spacer()
-                copyButton
                 exportMenu
                 undoButton
             }
@@ -247,24 +246,16 @@ struct ContentView: View {
         }
     }
 
-    private var copyButton: some View {
-        Button {
-            copyToClipboard()
-        } label: {
-            Label("Copy", systemImage: "document.on.clipboard")
-        }
-        .help("Copy scene with annotations to clipboard")
-        .keyboardShortcut("c", modifiers: [.command, .shift])
-    }
-
     private var exportMenu: some View {
         Menu {
-            Button("With Annotations") {
-                exportImage(includeAnnotations: true)
+            Button("Save As...") {
+                exportImage()
             }
-            Button("Without Annotations") {
-                exportImage(includeAnnotations: false)
+            .keyboardShortcut("s", modifiers: [.command])
+            Button("Copy to Clipboard") {
+                copyToClipboard()
             }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
         } label: {
             Label("Export", systemImage: "square.and.arrow.up")
         }
@@ -297,21 +288,19 @@ struct ContentView: View {
         let rendered = ImageExporter.render(
             image: image,
             arrows: arrows,
-            texts: texts,
-            includeAnnotations: true
+            texts: texts
         )
 
         ImageExporter.copyToPasteboard(image: rendered)
     }
 
-    private func exportImage(includeAnnotations: Bool) {
+    private func exportImage() {
         guard let image = screenshotManager.capturedImage else { return }
 
         let rendered = ImageExporter.render(
             image: image,
             arrows: arrows,
-            texts: texts,
-            includeAnnotations: includeAnnotations
+            texts: texts
         )
 
         let panel = NSSavePanel()
