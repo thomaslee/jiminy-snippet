@@ -38,6 +38,7 @@ struct AnnotationCanvas: View {
     @State private var lastTapTime: Date?
     @State private var lastTapLocation: CGPoint?
     @State private var keyMonitor: Any?
+    @State private var scrollMonitor: Any?
     @State private var handleMode: HandleMode = .resize
 
     // Scroll view state used to keep the viewport centred over the same
@@ -110,11 +111,18 @@ struct AnnotationCanvas: View {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 handleKeyDown(event)
             }
+            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+                handleScrollWheel(event)
+            }
         }
         .onDisappear {
             if let monitor = keyMonitor {
                 NSEvent.removeMonitor(monitor)
                 keyMonitor = nil
+            }
+            if let monitor = scrollMonitor {
+                NSEvent.removeMonitor(monitor)
+                scrollMonitor = nil
             }
         }
     }
@@ -767,6 +775,29 @@ struct AnnotationCanvas: View {
             paddedHeight: padded.height,
             initialRef: initialRef
         )
+    }
+
+    /// ⌘+scroll zoom, matching the convention in Preview/Safari/Xcode. On a
+    /// trackpad this is the familiar "hold ⌘ and two-finger drag" gesture.
+    /// Returning `nil` swallows the event so the underlying `ScrollView`
+    /// doesn't also pan while the user is zooming. Events without the Command
+    /// modifier — or events that land outside this window — are passed
+    /// through untouched.
+    private func handleScrollWheel(_ event: NSEvent) -> NSEvent? {
+        guard event.modifierFlags.contains(.command),
+              event.window === NSApp.keyWindow
+        else { return event }
+
+        // `scrollingDeltaY` is in points for pixel-precise devices and in
+        // line-counts for classic wheels. The 0.01 factor gives pinch-like
+        // feel on a trackpad without being glacial on a mouse wheel.
+        let delta = event.scrollingDeltaY
+        guard delta != 0 else { return nil }
+
+        let factor = 1 + delta * 0.01
+        let target = scale * factor
+        scale = min(maxScale, max(minScale, target))
+        return nil
     }
 
     /// Trackpad pinch-to-zoom. Runs simultaneously with the drag/tap gestures
