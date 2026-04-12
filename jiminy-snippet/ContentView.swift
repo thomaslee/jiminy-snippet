@@ -899,20 +899,32 @@ private final class CustomResizeModel {
 private struct CustomResizeAccessory: View {
     @Bindable var model: CustomResizeModel
 
+    private var widthBinding: Binding<Int> {
+        Binding(
+            get: { model.width },
+            set: { newWidth in
+                model.width = newWidth
+                guard model.lockAspectRatio, newWidth > 0 else { return }
+                model.height = Int(round(Double(newWidth) / model.aspectRatio))
+            }
+        )
+    }
+
+    private var heightBinding: Binding<Int> {
+        Binding(
+            get: { model.height },
+            set: { newHeight in
+                model.height = newHeight
+                guard model.lockAspectRatio, newHeight > 0 else { return }
+                model.width = Int(round(Double(newHeight) * model.aspectRatio))
+            }
+        )
+    }
+
     var body: some View {
         Form {
-            TextField("Width:", value: $model.width, format: .number)
-                .onChange(of: model.width) {
-                    guard model.lockAspectRatio, model.width > 0 else { return }
-                    let newHeight = Int(round(Double(model.width) / model.aspectRatio))
-                    if newHeight != model.height { model.height = newHeight }
-                }
-            TextField("Height:", value: $model.height, format: .number)
-                .onChange(of: model.height) {
-                    guard model.lockAspectRatio, model.height > 0 else { return }
-                    let newWidth = Int(round(Double(model.height) * model.aspectRatio))
-                    if newWidth != model.width { model.width = newWidth }
-                }
+            TextField("Width:", value: widthBinding, format: .number)
+            TextField("Height:", value: heightBinding, format: .number)
             Toggle("Lock aspect ratio", isOn: $model.lockAspectRatio)
         }
         .frame(width: 240)
