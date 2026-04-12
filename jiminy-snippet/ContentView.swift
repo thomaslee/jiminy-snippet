@@ -137,9 +137,8 @@ struct ContentView: View {
 
     private var toolbar: some View {
         HStack(spacing: 12) {
-            captureMenu
-
             if screenshotManager.capturedImage != nil {
+                captureMenu
                 Divider().frame(height: 24)
                 toolPicker
                 Divider().frame(height: 24)
@@ -152,7 +151,6 @@ struct ContentView: View {
                 rotateControls
                 Divider().frame(height: 24)
                 cropControls
-                Divider().frame(height: 24)
                 resizeControls
                 Spacer()
                 exportMenu
