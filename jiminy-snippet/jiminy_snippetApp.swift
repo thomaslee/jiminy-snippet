@@ -333,12 +333,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // launch. The user brings the editor window up explicitly via the
         // menu bar item (Show Capture Window, or any of the capture commands).
         NSApp.setActivationPolicy(.accessory)
+
+        // Toggle between .regular (Cmd+Tab visible) when the window is open
+        // and .accessory (menu-bar-only) when it is closed.
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(windowDidBecomeVisible),
+                       name: NSWindow.didBecomeKeyNotification, object: nil)
+        nc.addObserver(self, selector: #selector(windowDidClose),
+                       name: NSWindow.willCloseNotification, object: nil)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Closing the editor window must not quit the app — Jiminy has to
         // stay alive in the menu bar so the user can capture again.
         false
+    }
+
+    @objc private func windowDidBecomeVisible(_ note: Notification) {
+        guard isMainWindow(note) else { return }
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    @objc private func windowDidClose(_ note: Notification) {
+        guard isMainWindow(note) else { return }
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    private func isMainWindow(_ note: Notification) -> Bool {
+        guard let window = note.object as? NSWindow else { return false }
+        return window.identifier?.rawValue == jiminy_snippetApp.mainWindowID
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
