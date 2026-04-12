@@ -137,6 +137,25 @@ extension NSImage {
         return NSImage(cgImage: croppedCG, size: newPointSize)
     }
 
+    /// Returns a new image scaled to `newSize` (in points). Uses the same
+    /// drawing approach as `rotated(clockwise:)` so it works reliably with
+    /// any source bitmap representation.
+    func resized(to newSize: NSSize) -> NSImage? {
+        guard newSize.width >= 1, newSize.height >= 1 else { return nil }
+        let originalSize = size
+        guard originalSize.width > 0, originalSize.height > 0 else { return nil }
+
+        return NSImage(size: newSize, flipped: false) { _ in
+            self.draw(
+                in: NSRect(origin: .zero, size: newSize),
+                from: .zero,
+                operation: .copy,
+                fraction: 1.0
+            )
+            return true
+        }
+    }
+
     /// Returns a new image rotated by 90° with swapped dimensions.
     func rotated(clockwise: Bool) -> NSImage {
         let originalSize = size

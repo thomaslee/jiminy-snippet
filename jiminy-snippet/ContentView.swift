@@ -152,6 +152,8 @@ struct ContentView: View {
                 rotateControls
                 Divider().frame(height: 24)
                 cropControls
+                Divider().frame(height: 24)
+                resizeControls
                 Spacer()
                 exportMenu
             }
@@ -380,6 +382,84 @@ struct ContentView: View {
         .buttonStyle(.bordered)
         .tint(cropMode ? .accentColor : nil)
         .help(cropMode ? "Exit crop mode" : "Crop image")
+    }
+
+    private var resizeControls: some View {
+        Button {
+            showCustomResizeSheet()
+        } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+        }
+        .help("Resize image")
+    }
+
+    private func applyResize(to newSize: NSSize) {
+        guard let image = screenshotManager.capturedImage,
+              let resized = image.resized(to: newSize)
+        else { return }
+
+        let oldSize = image.size
+        guard oldSize.width > 0, oldSize.height > 0 else { return }
+
+        recordSnapshot()
+
+        let sx = newSize.width / oldSize.width
+        let sy = newSize.height / oldSize.height
+
+        for i in arrows.indices {
+            arrows[i].start.x *= sx
+            arrows[i].start.y *= sy
+            arrows[i].end.x *= sx
+            arrows[i].end.y *= sy
+            arrows[i].lineWidth *= min(sx, sy)
+        }
+        for i in texts.indices {
+            texts[i].position.x *= sx
+            texts[i].position.y *= sy
+            texts[i].fontSize *= min(sx, sy)
+        }
+        for i in rectangles.indices {
+            let r = rectangles[i].rect
+            rectangles[i].rect = CGRect(
+                x: r.origin.x * sx,
+                y: r.origin.y * sy,
+                width: r.width * sx,
+                height: r.height * sy
+            )
+            rectangles[i].lineWidth *= min(sx, sy)
+        }
+
+        selectedAnnotationId = nil
+        screenshotManager.capturedImage = resized
+        // markUnsaved() and zoomToFit() are handled by onChange observers
+    }
+
+    private func showCustomResizeSheet() {
+        guard let image = screenshotManager.capturedImage else { return }
+        let currentWidth = Int(image.size.width)
+        let currentHeight = Int(image.size.height)
+
+        let model = CustomResizeModel(
+            width: currentWidth,
+            height: currentHeight,
+            aspectRatio: image.size.width / image.size.height
+        )
+
+        let alert = NSAlert()
+        alert.messageText = "Resize Image"
+        alert.informativeText = "Current size: \(currentWidth) × \(currentHeight)"
+        alert.addButton(withTitle: "Resize")
+        alert.addButton(withTitle: "Cancel")
+
+        let hostingView = NSHostingView(rootView: CustomResizeAccessory(model: model))
+        hostingView.frame.size = hostingView.fittingSize
+        alert.accessoryView = hostingView
+
+        guard alert.runModal() == .alertFirstButtonReturn,
+              model.width >= 1, model.height >= 1
+        else { return }
+
+        applyResize(to: NSSize(width: CGFloat(model.width), height: CGFloat(model.height)))
     }
 
     private var exportMenu: some View {
@@ -796,6 +876,46 @@ private struct ZoomSceneValues: ViewModifier {
             .focusedSceneValue(\.zoomOutScene, (hasImage && canZoomOut) ? zoomOut : nil)
             .focusedSceneValue(\.zoomToFitScene, hasImage ? zoomToFit : nil)
             .focusedSceneValue(\.zoomActualSizeScene, hasImage ? zoomActualSize : nil)
+    }
+}
+
+/// Mutable state for the custom resize dialog, shared between the SwiftUI
+/// accessory view and the hosting `showCustomResizeSheet` method.
+@Observable
+private final class CustomResizeModel {
+    var width: Int
+    var height: Int
+    var lockAspectRatio: Bool = true
+    let aspectRatio: CGFloat
+
+    init(width: Int, height: Int, aspectRatio: CGFloat) {
+        self.width = width
+        self.height = height
+        self.aspectRatio = aspectRatio
+    }
+}
+
+/// SwiftUI accessory view for the custom resize alert.
+private struct CustomResizeAccessory: View {
+    @Bindable var model: CustomResizeModel
+
+    var body: some View {
+        Form {
+            TextField("Width:", value: $model.width, format: .number)
+                .onChange(of: model.width) {
+                    guard model.lockAspectRatio, model.width > 0 else { return }
+                    let newHeight = Int(round(Double(model.width) / model.aspectRatio))
+                    if newHeight != model.height { model.height = newHeight }
+                }
+            TextField("Height:", value: $model.height, format: .number)
+                .onChange(of: model.height) {
+                    guard model.lockAspectRatio, model.height > 0 else { return }
+                    let newWidth = Int(round(Double(model.height) * model.aspectRatio))
+                    if newWidth != model.width { model.width = newWidth }
+                }
+            Toggle("Lock aspect ratio", isOn: $model.lockAspectRatio)
+        }
+        .frame(width: 240)
     }
 }
 
