@@ -65,20 +65,22 @@ private struct MenuBarCommands: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Fullscreen") {
-            request(.fullscreen)
-        }
-        Button("Screen snap...") {
-            request(.region)
-        }
-        Button("From Clipboard") {
-            request(.fromClipboard)
-        }
-        Menu("Timed screen snap") {
-            ForEach([3, 5, 10], id: \.self) { seconds in
-                Button("\(seconds) Seconds") {
-                    request(.timed(seconds: seconds))
+        Menu("Capture") {
+            Button("Whole screen") {
+                request(.fullscreen)
+            }
+            Button("Screen region...") {
+                request(.region)
+            }
+            Menu("Screen region with delay...") {
+                ForEach([3, 5, 10], id: \.self) { seconds in
+                    Button("\(seconds) Seconds") {
+                        request(.timed(seconds: seconds))
+                    }
                 }
+            }
+            Button("Clipboard") {
+                request(.fromClipboard)
             }
         }
         Divider()

@@ -161,16 +161,13 @@ struct ContentView: View {
 
     private var captureMenu: some View {
         Menu {
-            Button("Fullscreen") {
+            Button("Whole screen") {
                 beginNewCapture { screenshotManager.captureFullscreen() }
             }
-            Button("Screen snap...") {
+            Button("Screen region...") {
                 beginNewCapture { screenshotManager.captureRegion() }
             }
-            Button("From Clipboard") {
-                pasteFromClipboard()
-            }
-            Menu("Timed screen snap") {
+            Menu("Screen region with delay...") {
                 ForEach(timedCaptureDurations, id: \.self) { seconds in
                     Button("\(seconds) Seconds") {
                         beginNewCapture {
@@ -178,6 +175,9 @@ struct ContentView: View {
                         }
                     }
                 }
+            }
+            Button("Clipboard") {
+                pasteFromClipboard()
             }
         } label: {
             Label("Capture", systemImage: "camera")
