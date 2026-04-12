@@ -396,7 +396,11 @@ final class ScreenshotManager {
         guard !windows.isEmpty else { return }
         for window in windows {
             window.setIsVisible(true)
-            window.makeKeyAndOrderFront(nil)
+            if window.canBecomeKey {
+                window.makeKeyAndOrderFront(nil)
+            } else {
+                window.orderFront(nil)
+            }
         }
         NSApplication.shared.activate()
     }
