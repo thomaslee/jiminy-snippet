@@ -99,7 +99,7 @@ struct ContentView: View {
                     scale: $scale,
                     minScale: minScale,
                     maxScale: maxScale,
-                    cropMode: cropMode,
+                    cropMode: $cropMode,
                     cropRect: $cropRect,
                     onCropApply: applyCrop,
                     onCropCancel: cancelCrop,

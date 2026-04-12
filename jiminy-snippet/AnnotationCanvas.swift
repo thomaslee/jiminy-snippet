@@ -19,7 +19,7 @@ struct AnnotationCanvas: View {
     @Binding var scale: CGFloat
     let minScale: CGFloat
     let maxScale: CGFloat
-    let cropMode: Bool
+    @Binding var cropMode: Bool
     @Binding var cropRect: CGRect?
     var onCropApply: () -> Void = {}
     var onCropCancel: () -> Void = {}
@@ -88,7 +88,6 @@ struct AnnotationCanvas: View {
                     width: imageSize.width * scale,
                     height: imageSize.height * scale
                 )
-                .overlay(alignment: .topLeading) { cropControlsOverlay }
             }
             .background(Color(nsColor: .windowBackgroundColor))
             .scrollPosition($scrollPosition)
@@ -143,6 +142,10 @@ struct AnnotationCanvas: View {
                 return nil
             }
         case KeyCode.escape:
+            if cropMode {
+                onCropCancel()
+                return nil
+            }
             if editing == nil, selectedAnnotationId != nil {
                 selectedAnnotationId = nil
                 return nil
@@ -231,61 +234,13 @@ struct AnnotationCanvas: View {
 
     // MARK: - Crop Overlay
 
-    @ViewBuilder
-    private var cropControlsOverlay: some View {
-        if cropMode, let rect = cropRect, !isCroppingDrag {
-            let offset = cropControlsOffset(for: rect)
-            HStack(spacing: 8) {
-                Button("Cancel", role: .cancel) { onCropCancel() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Crop") { onCropApply() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-            }
-            .padding(6)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-            .shadow(radius: 4)
-            .fixedSize()
-            .offset(x: offset.x, y: offset.y)
-        }
-    }
-
-    /// Positions the Crop/Cancel pill so it stays inside the ScrollView's
-    /// content frame — preferring just below the crop rect, but flipping above
-    /// or tucking inside at the bottom when there isn't enough room.
-    private func cropControlsOffset(for rect: CGRect) -> CGPoint {
-        let padding: CGFloat = 8
-        // Rough size of the pill; exact measurement isn't worth a GeometryReader.
-        let estimatedWidth: CGFloat = 180
-        let estimatedHeight: CGFloat = 44
-
-        let contentWidth = imageSize.width * scale
-        let contentHeight = imageSize.height * scale
-
-        let belowY = rect.maxY * scale + padding
-        let aboveY = rect.minY * scale - estimatedHeight - padding
-
-        let y: CGFloat
-        if belowY + estimatedHeight <= contentHeight {
-            y = belowY
-        } else if aboveY >= 0 {
-            y = aboveY
-        } else {
-            y = max(0, contentHeight - estimatedHeight - padding)
-        }
-
-        let maxX = max(0, contentWidth - estimatedWidth)
-        let x = max(0, min(maxX, rect.maxX * scale - estimatedWidth))
-        return CGPoint(x: x, y: y)
-    }
-
     /// Instructional hint shown while crop mode is active but the user hasn't
     /// yet drawn a selection. Sits in the ScrollView's viewport space (not
     /// image space), so it stays centred regardless of zoom or scroll.
     @ViewBuilder
     private var cropInstructionOverlay: some View {
         if cropMode, cropRect == nil, !isCroppingDrag {
-            Text("Drag to select a crop region")
+            Text("Drag to select a crop region · Esc to cancel")
                 .font(.headline)
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
@@ -612,7 +567,12 @@ struct AnnotationCanvas: View {
                 width: abs(end.x - start.x),
                 height: abs(end.y - start.y)
             ).intersection(imageBounds)
-            cropRect = (rect.width > 1 && rect.height > 1) ? rect : nil
+            if rect.width > 1 && rect.height > 1 {
+                cropRect = rect
+                onCropApply()
+            } else {
+                cropRect = nil
+            }
         }
         dragOperation = .none
     }
