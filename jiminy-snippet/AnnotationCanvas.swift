@@ -578,6 +578,7 @@ struct AnnotationCanvas: View {
             let end = value.location
             let arrow = ArrowAnnotation(start: start, end: end, color: selectedColor)
             arrows.append(arrow)
+            selectedAnnotationId = arrow.id
             selectedTool = nil
         } else if case .creatingRectangle(let start, _) = dragOperation {
             let end = value.location
