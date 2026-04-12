@@ -84,13 +84,14 @@ private struct MenuBarCommands: View {
             }
         }
         Divider()
-        Button("Show Jiminy") {
+        Button("Show Capture Window") {
             showMainWindow()
         }
         Divider()
-        Button("Quit Jiminy") {
+        Button("Quit") {
             NSApp.terminate(nil)
         }
+        .keyboardShortcut("q", modifiers: .command)
     }
 
     /// Sets the pending request *before* opening the window so ContentView's
@@ -330,7 +331,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar-first experience: no Dock icon, no auto-raised window at
         // launch. The user brings the editor window up explicitly via the
-        // menu bar item (Show Jiminy, or any of the capture commands).
+        // menu bar item (Show Capture Window, or any of the capture commands).
         NSApp.setActivationPolicy(.accessory)
     }
 
