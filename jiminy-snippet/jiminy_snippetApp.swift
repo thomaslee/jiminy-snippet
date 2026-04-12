@@ -22,7 +22,7 @@ struct jiminy_snippetApp: App {
                 .onAppear { appDelegate.screenshotManager = screenshotManager }
         }
         .defaultSize(width: 900, height: 700)
-        .defaultLaunchBehavior(.suppressed)
+        .defaultLaunchBehavior(SettingsManager.shared.showCaptureWindowOnStartup ? .automatic : .suppressed)
         .commands {
             CommandGroup(replacing: .saveItem) {
                 SaveSceneMenuItem()
@@ -42,6 +42,10 @@ struct jiminy_snippetApp: App {
                 ZoomMenuItems()
                 Divider()
             }
+        }
+
+        Settings {
+            SettingsView()
         }
 
         MenuBarExtra {
@@ -87,6 +91,8 @@ private struct MenuBarCommands: View {
         Button("Show Capture Window") {
             showMainWindow()
         }
+        Divider()
+        SettingsLink()
         Divider()
         Button("Quit") {
             NSApp.terminate(nil)
@@ -333,6 +339,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // launch. The user brings the editor window up explicitly via the
         // menu bar item (Show Capture Window, or any of the capture commands).
         NSApp.setActivationPolicy(.accessory)
+
+
 
         // Toggle between .regular (Cmd+Tab visible) when the window is open
         // and .accessory (menu-bar-only) when it is closed.
