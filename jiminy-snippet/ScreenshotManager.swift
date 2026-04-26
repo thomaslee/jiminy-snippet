@@ -33,6 +33,14 @@ final class ScreenshotManager {
     /// rotate so that Save can overwrite the existing file.
     var currentFileURL: URL?
 
+    /// A freshly-captured image awaiting ContentView's discard-confirmation
+    /// pass. Capture flows write here on success instead of mutating
+    /// `capturedImage` directly so the user is only ever prompted to discard
+    /// edits *after* a capture has actually been acquired — pressing Escape
+    /// during region selection or the timed countdown leaves this nil and the
+    /// existing edits untouched.
+    var incomingCapture: NSImage?
+
     /// Out-of-band capture request, set by the menu bar item and consumed by
     /// ContentView. Using a state field here (instead of calling capture
     /// methods directly from the menu bar) lets ContentView apply its
@@ -105,11 +113,10 @@ final class ScreenshotManager {
                 configuration: config
             )
 
-            self.capturedImage = NSImage(
+            self.incomingCapture = NSImage(
                 cgImage: cgImage,
                 size: NSSize(width: display.width, height: display.height)
             )
-            self.currentFileURL = nil
         } catch {
             print("Screenshot failed: \(error)")
         }
@@ -389,11 +396,10 @@ final class ScreenshotManager {
                 configuration: config
             )
 
-            self.capturedImage = NSImage(
+            self.incomingCapture = NSImage(
                 cgImage: cgImage,
                 size: NSSize(width: selectedRect.width, height: selectedRect.height)
             )
-            self.currentFileURL = nil
         } catch {
             print("Region capture failed: \(error)")
         }

@@ -26,6 +26,7 @@ struct ContentView: View {
     @State private var undoHistory = UndoHistory()
     @State private var toast: ExportToast?
     @State private var toastDismissTask: Task<Void, Never>?
+    @State private var isHandlingIncomingCapture = false
 
     private let scaleStep: CGFloat = 0.25
     private let minScale: CGFloat = 0.25
@@ -44,6 +45,9 @@ struct ContentView: View {
             .onChange(of: screenshotManager.capturedImage) {
                 markUnsaved()
                 zoomToFit()
+            }
+            .onChange(of: screenshotManager.incomingCapture) {
+                handleIncomingCapture()
             }
             .onChange(of: selectedAnnotationId) {
                 syncPaletteToSelection()
@@ -226,19 +230,44 @@ struct ContentView: View {
         }
     }
 
-    /// Prompts the user to discard unsaved changes (if any) and, on
-    /// confirmation, clears existing annotations and runs `capture`.
+    /// Starts a new capture flow. The unsaved-changes prompt is deferred
+    /// until the capture actually succeeds (see `handleIncomingCapture`) so
+    /// cancelling region selection or the countdown doesn't throw away edits.
     private func beginNewCapture(_ capture: () -> Void) {
+        // Abort any pending timed capture so switching capture modes mid-
+        // countdown restores the Jiminy window before the new action runs.
+        screenshotManager.cancelTimedCapture()
+        capture()
+    }
+
+    /// Adopts a freshly-acquired capture, prompting the user to discard
+    /// unsaved edits first if necessary. If the user declines, the new image
+    /// is dropped and existing edits are preserved.
+    ///
+    /// The `isHandlingIncomingCapture` flag guards against re-entrancy:
+    /// `NSAlert.runModal()` pumps the event loop, so a second capture landing
+    /// mid-prompt would otherwise recursively invoke this method. Today no
+    /// code path can deliver a second capture while the modal is up, so the
+    /// guard is belt-and-braces. When we add a global hotkey for region
+    /// capture (or any other background-triggered capture path) it becomes
+    /// load-bearing, and at that point it's worth replacing this whole
+    /// `runModal` flow with a SwiftUI `.confirmationDialog` driven by an
+    /// optional pending-capture state — non-blocking, no nested event loop,
+    /// and serialization falls out of the dialog's own state machine.
+    private func handleIncomingCapture() {
+        guard !isHandlingIncomingCapture else { return }
+        guard let image = screenshotManager.incomingCapture else { return }
+        screenshotManager.incomingCapture = nil
+        isHandlingIncomingCapture = true
+        defer { isHandlingIncomingCapture = false }
         guard confirmDiscardIfNeeded(
             messageText: "You have unsaved changes",
             informativeText: "Taking a new screenshot will discard your current edits. Continue?",
             proceedButtonTitle: "Continue"
         ) else { return }
-        // Abort any pending timed capture so switching capture modes mid-
-        // countdown restores the Jiminy window before the new action runs.
-        screenshotManager.cancelTimedCapture()
         clearAnnotations()
-        capture()
+        screenshotManager.currentFileURL = nil
+        screenshotManager.capturedImage = image
     }
 
     private func confirmDiscardIfNeeded(
