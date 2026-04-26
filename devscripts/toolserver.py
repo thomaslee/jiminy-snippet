@@ -10,7 +10,7 @@ Usage (on the host):
 
     python3 devscripts/toolserver.py
     # or, to bind to a specific interface/port:
-    python3 devscripts/toolserver.py --host 0.0.0.0 --port 8765
+    python3 devscripts/toolserver.py --host 127.0.0.1 --port 8765
 
 From the sandbox:
 
@@ -40,9 +40,9 @@ Security notes:
   - Only commands listed in ALLOWED_COMMANDS may be invoked. Each command is
     executed directly (no shell), so argument quoting/expansion does not
     happen on the server side.
-  - The server binds to 127.0.0.1 by default. To accept requests from the
-    Docker bridge (host.docker.internal -> 192.168.65.254), pass
-    `--host 0.0.0.0` (or the specific bridge address).
+  - The server binds to 0.0.0.0 by default so it accepts requests from the
+    Docker bridge (host.docker.internal -> 192.168.65.254). Pass
+    `--host 127.0.0.1` to restrict to loopback.
   - Working directory defaults to the repo root (parent of this file). Pass
     `cwd` in the request body to override, but it must resolve inside the
     repo root.
@@ -299,8 +299,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--host", default="127.0.0.1",
-                        help="Interface to bind (default: 127.0.0.1; use 0.0.0.0 to accept from the Docker bridge)")
+    parser.add_argument("--host", default="0.0.0.0",
+                        help="Interface to bind (default: 0.0.0.0; use 127.0.0.1 to restrict to loopback)")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on (default: 8765)")
     args = parser.parse_args()
 
