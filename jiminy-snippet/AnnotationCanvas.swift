@@ -13,7 +13,7 @@ struct AnnotationCanvas: View {
     @Binding var texts: [TextAnnotation]
     @Binding var rectangles: [RectangleAnnotation]
     @Binding var selectedTool: AnnotationTool?
-    @Binding var selectedAnnotationId: UUID?
+    @Binding var selectedAnnotationIds: Set<UUID>
     let selectedColor: Color
     let rectangleFillStyle: RectangleFillStyle
     @Binding var scale: CGFloat
@@ -65,10 +65,17 @@ struct AnnotationCanvas: View {
         return sizes
     }
 
+    /// The single selected annotation, or nil when zero or many are selected.
+    /// Resize/rotate handles only activate against this id, so multi-selection
+    /// suppresses handle hit-testing alongside handle rendering.
+    private var singleSelectedId: UUID? {
+        selectedAnnotationIds.count == 1 ? selectedAnnotationIds.first : nil
+    }
+
     private func hitTest(at point: CGPoint) -> AnnotationHit? {
         hitTestAnnotations(
             at: point, arrows: arrows, texts: texts, rectangles: rectangles,
-            selectedId: selectedAnnotationId, textSizes: textSizes
+            selectedId: singleSelectedId, textSizes: textSizes
         )
     }
 
@@ -138,8 +145,8 @@ struct AnnotationCanvas: View {
     private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
         switch event.keyCode {
         case KeyCode.backspace, KeyCode.forwardDelete:
-            if editing == nil, let id = selectedAnnotationId {
-                deleteAnnotation(id: id)
+            if editing == nil, !selectedAnnotationIds.isEmpty {
+                deleteSelectedAnnotations()
                 return nil
             }
         case KeyCode.escape:
@@ -147,8 +154,8 @@ struct AnnotationCanvas: View {
                 onCropCancel()
                 return nil
             }
-            if editing == nil, selectedAnnotationId != nil {
-                selectedAnnotationId = nil
+            if editing == nil, !selectedAnnotationIds.isEmpty {
+                selectedAnnotationIds.removeAll()
                 return nil
             }
         default:
@@ -157,18 +164,17 @@ struct AnnotationCanvas: View {
         return event
     }
 
-    private func deleteAnnotation(id: UUID) {
-        guard arrows.contains(where: { $0.id == id })
-                || texts.contains(where: { $0.id == id })
-                || rectangles.contains(where: { $0.id == id })
-        else {
-            return
-        }
+    private func deleteSelectedAnnotations() {
+        let ids = selectedAnnotationIds
+        let hasAny = arrows.contains(where: { ids.contains($0.id) })
+            || texts.contains(where: { ids.contains($0.id) })
+            || rectangles.contains(where: { ids.contains($0.id) })
+        guard hasAny else { return }
         onBeginEdit()
-        arrows.removeAll { $0.id == id }
-        texts.removeAll { $0.id == id }
-        rectangles.removeAll { $0.id == id }
-        selectedAnnotationId = nil
+        arrows.removeAll { ids.contains($0.id) }
+        texts.removeAll { ids.contains($0.id) }
+        rectangles.removeAll { ids.contains($0.id) }
+        selectedAnnotationIds.removeAll()
     }
 
     // MARK: - Canvas
@@ -180,22 +186,40 @@ struct AnnotationCanvas: View {
                 in: CGRect(origin: .zero, size: imageSize)
             )
 
+            // Resize/rotate handles only render when exactly one annotation is
+            // selected; the multi-select case still shows the highlight glow
+            // around each member but suppresses manipulation handles.
+            let isSingleSelection = selectedAnnotationIds.count == 1
+
             for arrow in arrows {
-                let selected = selectedAnnotationId == arrow.id
-                AnnotationRenderer.drawArrow(arrow, selected: selected, in: &context)
+                let selected = selectedAnnotationIds.contains(arrow.id)
+                AnnotationRenderer.drawArrow(
+                    arrow,
+                    selected: selected,
+                    showHandles: selected && isSingleSelection,
+                    in: &context
+                )
             }
 
             for rectangle in rectangles {
-                let selected = selectedAnnotationId == rectangle.id
-                AnnotationRenderer.drawRectangle(rectangle, selected: selected, in: &context)
+                let selected = selectedAnnotationIds.contains(rectangle.id)
+                AnnotationRenderer.drawRectangle(
+                    rectangle,
+                    selected: selected,
+                    showHandles: selected && isSingleSelection,
+                    in: &context
+                )
             }
 
             for annotation in texts where annotation.id != editing?.id {
                 let (resolved, size) = AnnotationRenderer.resolveText(annotation, in: context)
                 AnnotationRenderer.drawText(annotation, resolved: resolved, size: size, in: &context)
-                if selectedAnnotationId == annotation.id {
+                if selectedAnnotationIds.contains(annotation.id) {
                     AnnotationRenderer.drawTextSelection(
-                        annotation, size: size, in: &context
+                        annotation,
+                        size: size,
+                        showHandles: isSingleSelection,
+                        in: &context
                     )
                 }
             }
@@ -222,7 +246,7 @@ struct AnnotationCanvas: View {
                     color: selectedColor,
                     style: rectangleFillStyle
                 )
-                AnnotationRenderer.drawRectangle(draft, selected: false, in: &context)
+                AnnotationRenderer.drawRectangle(draft, selected: false, showHandles: false, in: &context)
             }
 
             if cropMode {
@@ -324,7 +348,13 @@ struct AnnotationCanvas: View {
         DragOutHandle(
             makeSource: { dragOutSource() },
             isEmptySpace: { canStartDragOut(at: $0) },
-            onClickWithoutDrag: { selectedAnnotationId = nil }
+            onClickWithoutDrag: {
+                // Shift-click on empty space leaves multi-selection intact —
+                // matches the shift-toggle convention used inside hit areas.
+                if !NSEvent.modifierFlags.contains(.shift) {
+                    selectedAnnotationIds.removeAll()
+                }
+            }
         )
         .frame(width: imageSize.width, height: imageSize.height)
         .allowsHitTesting(editing == nil)
@@ -508,6 +538,24 @@ struct AnnotationCanvas: View {
                 )
             }
 
+        case .movingMultiple(let initialArrows, let initialTexts, let initialRectangles):
+            for (id, initial) in initialArrows {
+                arrows.update(id: id) { arrow in
+                    arrow.start = initial.start + translation
+                    arrow.end = initial.end + translation
+                }
+            }
+            for (id, initialPos) in initialTexts {
+                texts.update(id: id) { $0.position = initialPos + translation }
+            }
+            for (id, initialRect) in initialRectangles {
+                rectangles.update(id: id) {
+                    $0.rect = initialRect.offsetBy(
+                        dx: translation.width, dy: translation.height
+                    )
+                }
+            }
+
         case .rotatingText(let id, let initialRotation, let referenceAngle, let center,
                            let paddedWidth, let paddedHeight, let scaleX, let scaleY):
             texts.update(id: id) { text in
@@ -540,20 +588,37 @@ struct AnnotationCanvas: View {
         }
 
         if selectedTool == .arrow {
-            selectedAnnotationId = nil
+            selectedAnnotationIds.removeAll()
             return .creatingArrow(start: startPoint, end: startPoint)
         }
 
         if selectedTool == .rectangle {
-            selectedAnnotationId = nil
+            selectedAnnotationIds.removeAll()
             return .creatingRectangle(start: startPoint, end: startPoint)
+        }
+
+        // Shift is reserved for multi-select toggle on click. Letting a shift-
+        // drag start an annotation drag would change which annotation is being
+        // manipulated mid-gesture, which is jarring — and dragging multiple
+        // annotations at once isn't supported, so just bail.
+        if NSEvent.modifierFlags.contains(.shift) {
+            return nil
         }
 
         guard let hit = hitTest(at: startPoint) else { return nil }
 
+        // Body-drag on any member of a multi-selection moves the whole group
+        // together. Handle drags don't reach this branch — handles aren't
+        // drawn or hit-tested while multi-selected — so this is purely the
+        // translate-as-a-unit case.
+        let hitId = hit.id
+        if hit.isBody, selectedAnnotationIds.contains(hitId), selectedAnnotationIds.count > 1 {
+            return beginMovingMultiple()
+        }
+
         switch hit {
         case .arrow(let id, let zone):
-            selectedAnnotationId = id
+            selectedAnnotationIds = [id]
             guard let arrow = arrows.first(where: { $0.id == id }) else { return nil }
             let mask: ArrowEndpointMask
             switch zone {
@@ -567,7 +632,7 @@ struct AnnotationCanvas: View {
             )
 
         case .text(let id, let zone):
-            selectedAnnotationId = id
+            selectedAnnotationIds = [id]
             guard let annotation = texts.first(where: { $0.id == id }) else { return nil }
             switch zone {
             case .handle(let handlePos):
@@ -581,7 +646,7 @@ struct AnnotationCanvas: View {
             }
 
         case .rectangle(let id, let zone):
-            selectedAnnotationId = id
+            selectedAnnotationIds = [id]
             guard let rectangle = rectangles.first(where: { $0.id == id }) else { return nil }
             switch zone {
             case .body:
@@ -599,6 +664,27 @@ struct AnnotationCanvas: View {
                 return nil
             }
         }
+    }
+
+    /// Snapshots every selected annotation's current geometry so a drag can
+    /// translate them all from a stable base.
+    private func beginMovingMultiple() -> DragOperation {
+        let ids = selectedAnnotationIds
+        var initialArrows: [UUID: (start: CGPoint, end: CGPoint)] = [:]
+        var initialTexts: [UUID: CGPoint] = [:]
+        var initialRectangles: [UUID: CGRect] = [:]
+        for arrow in arrows where ids.contains(arrow.id) {
+            initialArrows[arrow.id] = (arrow.start, arrow.end)
+        }
+        for text in texts where ids.contains(text.id) {
+            initialTexts[text.id] = text.position
+        }
+        for rectangle in rectangles where ids.contains(rectangle.id) {
+            initialRectangles[rectangle.id] = rectangle.rect
+        }
+        return .movingMultiple(
+            arrows: initialArrows, texts: initialTexts, rectangles: initialRectangles
+        )
     }
 
     /// Builds a `rotatingRectangle` drag operation anchored at the rect's
@@ -626,7 +712,7 @@ struct AnnotationCanvas: View {
             let end = value.location
             let arrow = ArrowAnnotation(start: start, end: end, color: selectedColor)
             arrows.append(arrow)
-            selectedAnnotationId = arrow.id
+            selectedAnnotationIds = [arrow.id]
             selectedTool = nil
         } else if case .creatingRectangle(let start, _) = dragOperation {
             let end = value.location
@@ -643,7 +729,7 @@ struct AnnotationCanvas: View {
                     style: rectangleFillStyle
                 )
                 rectangles.append(rectangle)
-                selectedAnnotationId = rectangle.id
+                selectedAnnotationIds = [rectangle.id]
             }
             selectedTool = nil
         } else if case .resizingRectangle(let id, _, _, _) = dragOperation {
@@ -694,14 +780,22 @@ struct AnnotationCanvas: View {
             return
         }
 
+        let isShift = NSEvent.modifierFlags.contains(.shift)
         if let hit = hitTest(at: location) {
-            switch hit {
-            case .arrow(let id, _): selectedAnnotationId = id
-            case .rectangle(let id, _): selectedAnnotationId = id
-            case .text(let id, _): selectedAnnotationId = id
+            let id = hit.id
+            if isShift {
+                // Toggle: shift-clicking an already-selected annotation removes
+                // it from the selection without disturbing the others.
+                if selectedAnnotationIds.contains(id) {
+                    selectedAnnotationIds.remove(id)
+                } else {
+                    selectedAnnotationIds.insert(id)
+                }
+            } else {
+                selectedAnnotationIds = [id]
             }
-        } else {
-            selectedAnnotationId = nil
+        } else if !isShift {
+            selectedAnnotationIds.removeAll()
         }
     }
 
@@ -727,7 +821,7 @@ struct AnnotationCanvas: View {
         texts.append(annotation)
         editing = EditingState(id: annotation.id, originalText: "")
         focusedTextId = annotation.id
-        selectedAnnotationId = annotation.id
+        selectedAnnotationIds = [annotation.id]
         selectedTool = nil
     }
 
@@ -735,7 +829,7 @@ struct AnnotationCanvas: View {
         guard let annotation = texts.first(where: { $0.id == id }) else { return }
         onBeginEdit()
         editing = EditingState(id: id, originalText: annotation.text)
-        selectedAnnotationId = id
+        selectedAnnotationIds = [id]
     }
 
     private func commitTextEditing(id: UUID) {
@@ -1026,6 +1120,14 @@ private enum DragOperation {
         paddedHeight: CGFloat,
         scaleX: CGFloat,
         scaleY: CGFloat
+    )
+    /// Translates several annotations together — the body-drag flavour of a
+    /// multi-selection. Each entry stores the initial geometry so the drag
+    /// translation can be applied from a stable base.
+    case movingMultiple(
+        arrows: [UUID: (start: CGPoint, end: CGPoint)],
+        texts: [UUID: CGPoint],
+        rectangles: [UUID: CGRect]
     )
 }
 

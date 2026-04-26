@@ -50,6 +50,23 @@ enum AnnotationHit {
     case arrow(id: UUID, zone: HitZone)
     case text(id: UUID, zone: HitZone)
     case rectangle(id: UUID, zone: HitZone)
+
+    var id: UUID {
+        switch self {
+        case .arrow(let id, _), .text(let id, _), .rectangle(let id, _): return id
+        }
+    }
+
+    var zone: HitZone {
+        switch self {
+        case .arrow(_, let zone), .text(_, let zone), .rectangle(_, let zone): return zone
+        }
+    }
+
+    var isBody: Bool {
+        if case .body = zone { return true }
+        return false
+    }
 }
 
 /// Hit-tests a point against all annotations.

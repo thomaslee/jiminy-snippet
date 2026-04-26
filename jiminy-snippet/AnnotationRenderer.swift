@@ -53,8 +53,17 @@ enum AnnotationRenderer {
 
     // MARK: - Arrow Drawing
 
-    /// Draws an arrow with optional selection highlight. Pass `selected: true` to show selection chrome + handles.
-    static func drawArrow(_ arrow: ArrowAnnotation, selected: Bool, in context: inout GraphicsContext) {
+    /// Draws an arrow with optional selection highlight. `selected` shows the
+    /// glow that marks the arrow as part of the selection; `showHandles`
+    /// additionally renders the endpoint handles — suppressed during multi-
+    /// selection so the user doesn't try to drag handles that wouldn't know
+    /// which arrow to manipulate.
+    static func drawArrow(
+        _ arrow: ArrowAnnotation,
+        selected: Bool,
+        showHandles: Bool,
+        in context: inout GraphicsContext
+    ) {
         drawCartoonArrow(
             start: arrow.start,
             end: arrow.end,
@@ -64,7 +73,7 @@ enum AnnotationRenderer {
             in: &context
         )
 
-        if selected {
+        if showHandles {
             drawHandle(at: arrow.start, in: &context)
             drawHandle(at: arrow.end, in: &context)
         }
@@ -132,6 +141,7 @@ enum AnnotationRenderer {
     static func drawRectangle(
         _ rectangle: RectangleAnnotation,
         selected: Bool,
+        showHandles: Bool,
         in context: inout GraphicsContext
     ) {
         let bounds = rectangle.rect.standardized
@@ -194,9 +204,11 @@ enum AnnotationRenderer {
                     Path(roundedRect: localRect, cornerRadius: 4),
                     with: .color(.accentColor.opacity(0.7)), lineWidth: 1.5
                 )
-                drawRotateConnector(w: w, in: &ctx)
-                drawSquareHandles(w: w, h: h, in: &ctx)
-                drawRotateHandle(at: rotateHandleLocalPoint(w: w), in: &ctx)
+                if showHandles {
+                    drawRotateConnector(w: w, in: &ctx)
+                    drawSquareHandles(w: w, h: h, in: &ctx)
+                    drawRotateHandle(at: rotateHandleLocalPoint(w: w), in: &ctx)
+                }
             }
         }
     }
@@ -276,6 +288,7 @@ enum AnnotationRenderer {
     static func drawTextSelection(
         _ annotation: TextAnnotation,
         size: CGSize,
+        showHandles: Bool,
         in context: inout GraphicsContext
     ) {
         let padded = RenderConstants.paddedTextSize(size)
@@ -294,9 +307,11 @@ enum AnnotationRenderer {
                 with: .color(.accentColor.opacity(0.7)), lineWidth: 1.5
             )
 
-            drawRotateConnector(w: scaledSize.width, in: &ctx)
-            drawSquareHandles(w: scaledSize.width, h: scaledSize.height, in: &ctx)
-            drawRotateHandle(at: rotateHandleLocalPoint(w: scaledSize.width), in: &ctx)
+            if showHandles {
+                drawRotateConnector(w: scaledSize.width, in: &ctx)
+                drawSquareHandles(w: scaledSize.width, h: scaledSize.height, in: &ctx)
+                drawRotateHandle(at: rotateHandleLocalPoint(w: scaledSize.width), in: &ctx)
+            }
         }
     }
 

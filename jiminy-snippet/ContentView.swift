@@ -20,7 +20,7 @@ struct ContentView: View {
     @State private var texts: [TextAnnotation] = []
     @State private var rectangles: [RectangleAnnotation] = []
     @State private var rectangleFillStyle: RectangleFillStyle = .outlined
-    @State private var selectedAnnotationId: UUID? = nil
+    @State private var selectedAnnotationIds: Set<UUID> = []
     @State private var cropMode: Bool = false
     @State private var cropRect: CGRect? = nil
     @State private var undoHistory = UndoHistory()
@@ -49,7 +49,7 @@ struct ContentView: View {
             .onChange(of: screenshotManager.incomingCapture) {
                 handleIncomingCapture()
             }
-            .onChange(of: selectedAnnotationId) {
+            .onChange(of: selectedAnnotationIds) {
                 syncPaletteToSelection()
             }
             .task {
@@ -71,7 +71,7 @@ struct ContentView: View {
                 canZoomOut: scale > minScale,
                 canUndo: undoHistory.canUndo,
                 canRedo: undoHistory.canRedo,
-                canDuplicate: selectedAnnotationId != nil,
+                canDuplicate: !selectedAnnotationIds.isEmpty,
                 copy: copyToClipboard,
                 paste: pasteFromClipboard,
                 save: save,
@@ -102,7 +102,7 @@ struct ContentView: View {
                     texts: $texts,
                     rectangles: $rectangles,
                     selectedTool: $selectedTool,
-                    selectedAnnotationId: $selectedAnnotationId,
+                    selectedAnnotationIds: $selectedAnnotationIds,
                     selectedColor: selectedColor,
                     rectangleFillStyle: rectangleFillStyle,
                     scale: $scale,
@@ -400,18 +400,22 @@ struct ContentView: View {
     private func selectColor(at index: Int) {
         selectedColorIndex = index
         let color = AnnotationPalette.colors[index].color
-        guard let id = selectedAnnotationId else { return }
-        if let i = arrows.firstIndex(where: { $0.id == id }) {
-            guard arrows[i].color != color else { return }
-            recordSnapshot()
+        guard !selectedAnnotationIds.isEmpty else { return }
+
+        let ids = selectedAnnotationIds
+        let needsChange = arrows.contains(where: { ids.contains($0.id) && $0.color != color })
+            || texts.contains(where: { ids.contains($0.id) && $0.color != color })
+            || rectangles.contains(where: { ids.contains($0.id) && $0.color != color })
+        guard needsChange else { return }
+
+        recordSnapshot()
+        for i in arrows.indices where ids.contains(arrows[i].id) {
             arrows[i].color = color
-        } else if let i = texts.firstIndex(where: { $0.id == id }) {
-            guard texts[i].color != color else { return }
-            recordSnapshot()
+        }
+        for i in texts.indices where ids.contains(texts[i].id) {
             texts[i].color = color
-        } else if let i = rectangles.firstIndex(where: { $0.id == id }) {
-            guard rectangles[i].color != color else { return }
-            recordSnapshot()
+        }
+        for i in rectangles.indices where ids.contains(rectangles[i].id) {
             rectangles[i].color = color
         }
     }
@@ -422,8 +426,7 @@ struct ContentView: View {
     /// place).
     private var isRectangleContextActive: Bool {
         if selectedTool == .rectangle { return true }
-        guard let id = selectedAnnotationId else { return false }
-        return rectangles.contains(where: { $0.id == id })
+        return rectangles.contains(where: { selectedAnnotationIds.contains($0.id) })
     }
 
     private var rectangleStyleControls: some View {
@@ -452,12 +455,13 @@ struct ContentView: View {
     /// currently selected, applies the style to it in place (undoable).
     private func setRectangleFillStyle(_ style: RectangleFillStyle) {
         rectangleFillStyle = style
-        guard let id = selectedAnnotationId,
-              let i = rectangles.firstIndex(where: { $0.id == id }),
-              rectangles[i].style != style
-        else { return }
+        let ids = selectedAnnotationIds
+        let needsChange = rectangles.contains(where: { ids.contains($0.id) && $0.style != style })
+        guard needsChange else { return }
         recordSnapshot()
-        rectangles[i].style = style
+        for i in rectangles.indices where ids.contains(rectangles[i].id) {
+            rectangles[i].style = style
+        }
     }
 
     private var rotateControls: some View {
@@ -534,7 +538,7 @@ struct ContentView: View {
             rectangles[i].lineWidth *= min(sx, sy)
         }
 
-        selectedAnnotationId = nil
+        selectedAnnotationIds.removeAll()
         screenshotManager.capturedImage = resized
         // markUnsaved() and zoomToFit() are handled by onChange observers
     }
@@ -594,8 +598,13 @@ struct ContentView: View {
         .help("Save or copy the annotated image")
     }
 
+    /// Syncs the toolbar palette + rectangle style to the selection. Only fires
+    /// for single-selection — a heterogeneous multi-selection has no obvious
+    /// "current" color to surface, so we leave the toolbar alone.
     private func syncPaletteToSelection() {
-        guard let id = selectedAnnotationId else { return }
+        guard selectedAnnotationIds.count == 1,
+              let id = selectedAnnotationIds.first
+        else { return }
         let color: Color
         if let arrow = arrows.first(where: { $0.id == id }) {
             color = arrow.color
@@ -638,28 +647,40 @@ struct ContentView: View {
         undoHistory.discardLast()
     }
 
-    /// Duplicates the currently selected annotation, offsetting the copy so the
-    /// user can see it landed on top of the original. Selection moves to the
-    /// new copy so repeated invocations stack diagonally.
+    /// Duplicates every selected annotation, offsetting each copy so the user
+    /// can see it landed on top of the original. Selection moves to the new
+    /// copies so repeated invocations stack diagonally.
     private func duplicateSelectedAnnotation() {
-        guard let id = selectedAnnotationId else { return }
+        guard !selectedAnnotationIds.isEmpty else { return }
+        let ids = selectedAnnotationIds
         let offset = CGSize(width: 20, height: 20)
-        if let arrow = arrows.first(where: { $0.id == id }) {
-            recordSnapshot()
+
+        let arrowsToDup = arrows.filter { ids.contains($0.id) }
+        let textsToDup = texts.filter { ids.contains($0.id) }
+        let rectanglesToDup = rectangles.filter { ids.contains($0.id) }
+        guard !arrowsToDup.isEmpty || !textsToDup.isEmpty || !rectanglesToDup.isEmpty else {
+            return
+        }
+
+        recordSnapshot()
+
+        var newSelection: Set<UUID> = []
+        for arrow in arrowsToDup {
             let copy = arrow.duplicated(offset: offset)
             arrows.append(copy)
-            selectedAnnotationId = copy.id
-        } else if let text = texts.first(where: { $0.id == id }) {
-            recordSnapshot()
+            newSelection.insert(copy.id)
+        }
+        for text in textsToDup {
             let copy = text.duplicated(offset: offset)
             texts.append(copy)
-            selectedAnnotationId = copy.id
-        } else if let rectangle = rectangles.first(where: { $0.id == id }) {
-            recordSnapshot()
+            newSelection.insert(copy.id)
+        }
+        for rectangle in rectanglesToDup {
             let copy = rectangle.duplicated(offset: offset)
             rectangles.append(copy)
-            selectedAnnotationId = copy.id
+            newSelection.insert(copy.id)
         }
+        selectedAnnotationIds = newSelection
     }
 
     private func undo() {
@@ -696,7 +717,7 @@ struct ContentView: View {
         if screenshotManager.capturedImage !== snapshot.image {
             screenshotManager.capturedImage = snapshot.image
         }
-        selectedAnnotationId = nil
+        selectedAnnotationIds.removeAll()
         if cropMode {
             cancelCrop()
         }
@@ -823,7 +844,7 @@ struct ContentView: View {
         } else {
             cropMode = true
             cropRect = nil
-            selectedAnnotationId = nil
+            selectedAnnotationIds.removeAll()
             selectedTool = nil
         }
     }
@@ -860,7 +881,7 @@ struct ContentView: View {
             rectangles[i].rect = rectangles[i].rect.offsetBy(dx: dx, dy: dy)
         }
 
-        selectedAnnotationId = nil
+        selectedAnnotationIds.removeAll()
         screenshotManager.capturedImage = cropped
         cropMode = false
         cropRect = nil
@@ -901,7 +922,7 @@ struct ContentView: View {
             )
         }
 
-        selectedAnnotationId = nil
+        selectedAnnotationIds.removeAll()
         // zoomToFit() and markUnsaved() are handled by onChange observers
     }
 
