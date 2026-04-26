@@ -175,6 +175,12 @@ final class ScreenshotManager {
         panel.setFrameOrigin(origin)
         countdownWindow = panel
         panel.orderFrontRegardless()
+        // Activate the app and make the panel key so it receives the Escape
+        // key while the countdown is running. The selection window was just
+        // dismissed, so without this our app may lose focus to whatever was
+        // frontmost before, and key events would bypass us.
+        NSApplication.shared.activate()
+        panel.makeKey()
 
         countdownTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -257,7 +263,7 @@ final class ScreenshotManager {
             y: screenFrame.midY - size.height / 2
         )
 
-        let panel = NSPanel(
+        let panel = CountdownPanel(
             contentRect: NSRect(origin: origin, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -270,8 +276,9 @@ final class ScreenshotManager {
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         panel.ignoresMouseEvents = false
+        panel.onCancel = onCancel
         panel.contentView = NSHostingView(
-            rootView: CountdownView(state: state, onCancel: onCancel)
+            rootView: CountdownView(state: state)
         )
         return panel
     }
@@ -418,9 +425,26 @@ fileprivate final class CountdownState {
     init(seconds: Int) { self.seconds = seconds }
 }
 
+/// Custom panel subclass so the countdown surface can become key and route
+/// the Escape key to the cancel callback. A plain `NSPanel` ignores key
+/// events, so `keyDown` would never fire.
+fileprivate final class CountdownPanel: NSPanel {
+    var onCancel: (() -> Void)?
+
+    override var canBecomeKey: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        // 53 is the keyCode for the Escape key.
+        if event.keyCode == 53 {
+            onCancel?()
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+}
+
 fileprivate struct CountdownView: View {
     let state: CountdownState
-    let onCancel: () -> Void
 
     var body: some View {
         ZStack {
@@ -436,12 +460,10 @@ fileprivate struct CountdownView: View {
                     .monospacedDigit()
                     .contentTransition(.numericText(countsDown: true))
                     .animation(.snappy, value: state.seconds)
-                Text("Click to cancel")
+                Text("Press Esc to cancel")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onCancel)
     }
 }
