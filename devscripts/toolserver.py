@@ -54,6 +54,7 @@ import argparse
 import json
 import os
 import queue
+import shlex
 import shutil
 import subprocess
 import sys
@@ -215,6 +216,7 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return False
 
+        self.log_message("run %s (cwd=%s)", shlex.join([executable, *args]), cwd)
         start = time.monotonic()
         try:
             proc = subprocess.Popen(
