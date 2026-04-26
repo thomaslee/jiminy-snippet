@@ -53,3 +53,8 @@ fastlane/test_output
 # Claude Code — local-only
 CLAUDE.local.md
 .claude/
+
+# Python (devscripts/toolserver)
+__pycache__/
+*.pyc
+.venv/
