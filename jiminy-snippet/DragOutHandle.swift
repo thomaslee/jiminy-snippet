@@ -115,7 +115,13 @@ final class DragOutNSView: NSView, NSDraggingSource, NSFilePromiseProviderDelega
     }
 
     private func startDrag(with event: NSEvent, source: DragOutSource) {
-        guard let pngData = pngData(for: source) else { return }
+        let rendered = ImageExporter.render(
+            image: source.image,
+            arrows: source.arrows,
+            texts: source.texts,
+            rectangles: source.rectangles
+        )
+        guard let pngData = pngData(from: rendered) else { return }
 
         pendingPNGData = pngData
         pendingFilename = source.suggestedFilename
@@ -126,7 +132,7 @@ final class DragOutNSView: NSView, NSDraggingSource, NSFilePromiseProviderDelega
         let provider = ImageFilePromiseProvider(fileType: UTType.png.identifier, delegate: self)
         provider.pngData = pngData
 
-        let dragImage = dragPreview(for: source.image)
+        let dragImage = dragPreview(for: rendered)
         let dragOrigin = dragImageOrigin(for: dragImage, mouseLocation: event.locationInWindow)
         let dragFrame = NSRect(origin: dragOrigin, size: dragImage.size)
 
@@ -188,14 +194,8 @@ final class DragOutNSView: NSView, NSDraggingSource, NSFilePromiseProviderDelega
 
     // MARK: - Drag image / pasteboard helpers
 
-    private func pngData(for source: DragOutSource) -> Data? {
-        let rendered = ImageExporter.render(
-            image: source.image,
-            arrows: source.arrows,
-            texts: source.texts,
-            rectangles: source.rectangles
-        )
-        guard let tiff = rendered.tiffRepresentation,
+    private func pngData(from image: NSImage) -> Data? {
+        guard let tiff = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff)
         else { return nil }
         return bitmap.representation(using: .png, properties: [:])

@@ -201,6 +201,70 @@ install_tool = Tool(
 )
 
 
+# ---- launch -----------------------------------------------------------------
+
+
+def _validate_launch(payload: dict) -> dict:
+    timeout = _require_positive_number(payload, "timeout_seconds", 30)
+    return {"timeout_seconds": timeout}
+
+
+def _run_launch(validated: dict, repo_root: Path) -> Iterator[Event]:
+    timeout = validated["timeout_seconds"]
+    if not INSTALLED_PATH.is_dir():
+        raise ToolError(
+            f"app not found at {INSTALLED_PATH} — run /tools/install first"
+        )
+
+    yield ("step", {"message": "stopping any running jiminy-snippet"})
+    # pkill returns 1 when no process matches; that's expected on first launch.
+    yield from runner.run_command(["/usr/bin/pkill", "-x", "jiminy-snippet"], cwd=repo_root, timeout=timeout)
+
+    yield ("step", {"message": f"launching {INSTALLED_PATH}"})
+    code = yield from runner.run_command(
+        ["/usr/bin/open", "-a", str(INSTALLED_PATH)],
+        cwd=repo_root,
+        timeout=timeout,
+    )
+    if code != 0:
+        raise ToolError(f"open exited with status {code}")
+
+    yield ("info", {"launched_path": str(INSTALLED_PATH)})
+
+
+LAUNCH_DOC = """\
+launch — start (or restart) the installed jiminy-snippet app.
+
+GET  /tools/launch   — this documentation
+POST /tools/launch   — launch; response is text/event-stream
+
+Steps performed:
+  1. pkill -x jiminy-snippet           (failure-tolerant; no match is fine)
+  2. open  -a /Applications/jiminy-snippet.app
+
+The app must already be installed (see /tools/install). To pick up code
+changes, run /tools/build then /tools/install before /tools/launch.
+
+Request body (JSON; all fields optional):
+  {
+    "timeout_seconds": <positive number>      # default: 30 (per step)
+  }
+
+Response (Server-Sent Events) — same event types as /tools/build, plus:
+  event: step  — {"message": "..."}    (one per step above)
+  event: info  — {"launched_path": "..."}    (on success)
+"""
+
+
+launch_tool = Tool(
+    name="launch",
+    summary="Launch (or relaunch) the installed jiminy-snippet app",
+    documentation=LAUNCH_DOC,
+    validate=_validate_launch,
+    run=_run_launch,
+)
+
+
 # ---- registry ---------------------------------------------------------------
 
-REGISTRY: dict[str, Tool] = {t.name: t for t in (build_tool, install_tool)}
+REGISTRY: dict[str, Tool] = {t.name: t for t in (build_tool, install_tool, launch_tool)}

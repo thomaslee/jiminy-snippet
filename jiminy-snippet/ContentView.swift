@@ -125,6 +125,8 @@ struct ContentView: View {
                         zoomToFit()
                     }
                 }
+                Divider()
+                statusBar(for: image)
             } else {
                 emptyState
             }
@@ -140,6 +142,30 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: toast?.id)
+    }
+
+    /// Bottom-edge status bar showing the current image's pixel dimensions.
+    /// Pixel dimensions (not point dimensions) match what users expect for
+    /// screenshots — a Retina capture reads as e.g. 2880×1800, not 1440×900.
+    private func statusBar(for image: NSImage) -> some View {
+        let dimensions = pixelDimensions(of: image)
+        return HStack {
+            Spacer()
+            Text("\(dimensions.width) × \(dimensions.height) px")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(.bar)
+    }
+
+    private func pixelDimensions(of image: NSImage) -> (width: Int, height: Int) {
+        if let rep = image.representations.first(where: { $0.pixelsWide > 0 }) {
+            return (rep.pixelsWide, rep.pixelsHigh)
+        }
+        return (Int(image.size.width.rounded()), Int(image.size.height.rounded()))
     }
 
     private var emptyState: some View {
@@ -515,18 +541,22 @@ struct ContentView: View {
 
     private func showCustomResizeSheet() {
         guard let image = screenshotManager.capturedImage else { return }
-        let currentWidth = Int(image.size.width)
-        let currentHeight = Int(image.size.height)
+        // Use pixel dimensions so the dialog matches what the status bar
+        // displays — and so typing "1920" produces a 1920-pixel-wide image.
+        let dimensions = pixelDimensions(of: image)
+        let currentWidth = dimensions.width
+        let currentHeight = dimensions.height
+        let aspectRatio = CGFloat(currentWidth) / CGFloat(max(currentHeight, 1))
 
         let model = CustomResizeModel(
             width: currentWidth,
             height: currentHeight,
-            aspectRatio: image.size.width / image.size.height
+            aspectRatio: aspectRatio
         )
 
         let alert = NSAlert()
         alert.messageText = "Resize Image"
-        alert.informativeText = "Current size: \(currentWidth) × \(currentHeight)"
+        alert.informativeText = "Current size: \(currentWidth) × \(currentHeight) px"
         alert.addButton(withTitle: "Resize")
         alert.addButton(withTitle: "Cancel")
 
