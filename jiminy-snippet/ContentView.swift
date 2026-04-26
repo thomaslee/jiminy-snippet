@@ -24,6 +24,8 @@ struct ContentView: View {
     @State private var cropMode: Bool = false
     @State private var cropRect: CGRect? = nil
     @State private var undoHistory = UndoHistory()
+    @State private var toast: ExportToast?
+    @State private var toastDismissTask: Task<Void, Never>?
 
     private let scaleStep: CGFloat = 0.25
     private let minScale: CGFloat = 0.25
@@ -119,6 +121,17 @@ struct ContentView: View {
                 emptyState
             }
         }
+        .overlay(alignment: .bottom) {
+            if let toast {
+                ExportToastView(toast: toast)
+                    .padding(.bottom, 24)
+                    .transition(
+                        .opacity.combined(with: .move(edge: .bottom))
+                    )
+                    .id(toast.id)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: toast?.id)
     }
 
     private var emptyState: some View {
@@ -611,6 +624,7 @@ struct ContentView: View {
         )
 
         ImageExporter.copyToPasteboard(image: rendered)
+        showToast(.copied)
     }
 
     private func save() {
@@ -647,8 +661,21 @@ struct ContentView: View {
             try ImageExporter.save(image: rendered, to: url)
             screenshotManager.currentFileURL = url
             screenshotManager.hasUnsavedChanges = false
+            showToast(.saved(url: url))
         } catch {
             presentSaveError(url: url, error: error)
+        }
+    }
+
+    private func showToast(_ kind: ExportToast.Kind) {
+        let new = ExportToast(kind: kind)
+        toastDismissTask?.cancel()
+        toast = new
+        let duration = kind.duration
+        toastDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(duration))
+            guard !Task.isCancelled, toast?.id == new.id else { return }
+            toast = nil
         }
     }
 
@@ -926,6 +953,76 @@ private struct CustomResizeAccessory: View {
             Toggle("Lock aspect ratio", isOn: $model.lockAspectRatio)
         }
         .frame(width: 240)
+    }
+}
+
+private struct ExportToast: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case copied
+        case saved(url: URL)
+    }
+
+    let id = UUID()
+    let kind: Kind
+}
+
+extension ExportToast.Kind {
+    var duration: Double {
+        switch self {
+        case .copied: return 2.0
+        case .saved: return 2.5
+        }
+    }
+}
+
+private struct ExportToastView: View {
+    let toast: ExportToast
+
+    @State private var hovering = false
+
+    var body: some View {
+        switch toast.kind {
+        case .copied:
+            label(text: "Copied to clipboard")
+        case .saved(let url):
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } label: {
+                label(text: "Saved to \(url.lastPathComponent)", showsChevron: true)
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .pointerStyle(.link)
+            .help("Reveal in Finder")
+        }
+    }
+
+    private func label(text: String, showsChevron: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.primary)
+            if showsChevron {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.regularMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.primary.opacity(hovering ? 0.06 : 0))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+                }
+                .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+        }
     }
 }
 
