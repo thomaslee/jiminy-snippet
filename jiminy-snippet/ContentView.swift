@@ -62,6 +62,9 @@ struct ContentView: View {
             .onChange(of: screenshotManager.pendingCaptureRequest) {
                 handlePendingCaptureRequest()
             }
+            .onChange(of: screenshotManager.captureError) {
+                handleCaptureError()
+            }
             .modifier(SceneCommandValues(
                 hasImage: screenshotManager.capturedImage != nil,
                 canZoomIn: scale < maxScale,
@@ -107,6 +110,7 @@ struct ContentView: View {
                     maxScale: maxScale,
                     cropMode: $cropMode,
                     cropRect: $cropRect,
+                    dragOutFilename: screenshotManager.currentFileURL?.lastPathComponent,
                     onCropApply: applyCrop,
                     onCropCancel: cancelCrop,
                     onBeginEdit: recordSnapshot,
@@ -181,9 +185,11 @@ struct ContentView: View {
             Button("Whole screen") {
                 beginNewCapture { screenshotManager.captureFullscreen() }
             }
+            .help("Capture the entire screen")
             Button("Screen region...") {
                 beginNewCapture { screenshotManager.captureRegion() }
             }
+            .help("Drag to capture a rectangular region of the screen")
             Menu("Screen region with delay...") {
                 ForEach(timedCaptureDurations, id: \.self) { seconds in
                     Button("\(seconds) Seconds") {
@@ -191,11 +197,14 @@ struct ContentView: View {
                             screenshotManager.captureRegionAfterDelay(seconds: seconds)
                         }
                     }
+                    .help("Capture a screen region after a \(seconds)-second delay")
                 }
             }
+            .help("Capture a screen region after a countdown")
             Button("Clipboard") {
                 pasteFromClipboard()
             }
+            .help("Paste an image from the clipboard (⌘V)")
         } label: {
             Label("Capture", systemImage: "camera")
         }
@@ -268,6 +277,36 @@ struct ContentView: View {
         clearAnnotations()
         screenshotManager.currentFileURL = nil
         screenshotManager.capturedImage = image
+    }
+
+    /// Surfaces the most recent capture failure as a toast when the editor
+    /// window is on screen, or as an `NSAlert` when it isn't (e.g. a menu-bar
+    /// triggered capture that failed before the window finished opening).
+    /// Clears the published error so subsequent identical failures retoast.
+    private func handleCaptureError() {
+        guard let message = screenshotManager.captureError else { return }
+        screenshotManager.captureError = nil
+        if isEditorWindowVisible {
+            showToast(.error(message: message))
+        } else {
+            presentCaptureErrorAlert(message: message)
+        }
+    }
+
+    private var isEditorWindowVisible: Bool {
+        NSApp.windows.contains { window in
+            window.identifier?.rawValue == jiminy_snippetApp.mainWindowID
+                && window.isVisible
+        }
+    }
+
+    private func presentCaptureErrorAlert(message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Capture Failed"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     private func confirmDiscardIfNeeded(
@@ -507,13 +546,16 @@ struct ContentView: View {
             Button("Save") {
                 save()
             }
+            .help("Save the annotated image (⌘S)")
             Button("Save As...") {
                 saveAs()
             }
+            .help("Save the annotated image to a new file (⇧⌘S)")
             Button("Copy to Clipboard") {
                 copyToClipboard()
             }
             .keyboardShortcut("c", modifiers: [.command, .shift])
+            .help("Copy the annotated image to the clipboard (⇧⌘C)")
         } label: {
             Label("Export", systemImage: "square.and.arrow.up")
         }
@@ -989,6 +1031,7 @@ private struct ExportToast: Identifiable, Equatable {
     enum Kind: Equatable {
         case copied
         case saved(url: URL)
+        case error(message: String)
     }
 
     let id = UUID()
@@ -1000,6 +1043,7 @@ extension ExportToast.Kind {
         switch self {
         case .copied: return 2.0
         case .saved: return 2.5
+        case .error: return 3.5
         }
     }
 }
@@ -1023,11 +1067,22 @@ private struct ExportToastView: View {
             .onHover { hovering = $0 }
             .pointerStyle(.link)
             .help("Reveal in Finder")
+        case .error(let message):
+            label(text: "Capture failed: \(message)", showsErrorIcon: true)
         }
     }
 
-    private func label(text: String, showsChevron: Bool = false) -> some View {
+    private func label(
+        text: String,
+        showsChevron: Bool = false,
+        showsErrorIcon: Bool = false
+    ) -> some View {
         HStack(spacing: 8) {
+            if showsErrorIcon {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
             Text(text)
                 .font(.callout)
                 .foregroundStyle(.primary)

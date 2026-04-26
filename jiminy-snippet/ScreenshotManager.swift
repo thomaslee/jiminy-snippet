@@ -48,6 +48,13 @@ final class ScreenshotManager {
     /// uniformly across every capture code path.
     var pendingCaptureRequest: CaptureRequest?
 
+    /// Localized failure message from the most recent capture attempt. Set
+    /// from the ScreenCaptureKit catch sites and observed by ContentView,
+    /// which surfaces it as a toast (or, when the editor window isn't open,
+    /// as an `NSAlert`). User-driven cancellations (Escape during region
+    /// selection or the timed countdown) leave this nil — they aren't errors.
+    var captureError: String?
+
     // MARK: - Timed capture state
     //
     // These are implementation details of `captureFullscreenAfterDelay` — no
@@ -100,7 +107,10 @@ final class ScreenshotManager {
             let content = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: true
             )
-            guard let display = content.displays.first else { return }
+            guard let display = content.displays.first else {
+                reportCaptureError("No display available to capture.")
+                return
+            }
 
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
@@ -118,7 +128,7 @@ final class ScreenshotManager {
                 size: NSSize(width: display.width, height: display.height)
             )
         } catch {
-            print("Screenshot failed: \(error)")
+            reportCaptureError(error.localizedDescription)
         }
     }
 
@@ -382,7 +392,10 @@ final class ScreenshotManager {
             let content = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: true
             )
-            guard let display = content.displays.first else { return }
+            guard let display = content.displays.first else {
+                reportCaptureError("No display available to capture.")
+                return
+            }
 
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
@@ -401,8 +414,16 @@ final class ScreenshotManager {
                 size: NSSize(width: selectedRect.width, height: selectedRect.height)
             )
         } catch {
-            print("Region capture failed: \(error)")
+            reportCaptureError(error.localizedDescription)
         }
+    }
+
+    /// Publishes a capture failure for the UI to surface. Setting the field
+    /// each call (even if the message hasn't changed) is intentional so
+    /// observers always re-fire — this is consumed once and reset to nil by
+    /// ContentView, so consecutive identical failures should still toast.
+    private func reportCaptureError(_ message: String) {
+        captureError = message
     }
 
     private func restoreWindows(_ windows: [NSWindow]) {

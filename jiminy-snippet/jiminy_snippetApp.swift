@@ -67,6 +67,7 @@ private struct MenuBarCommands: View {
 
     @Environment(ScreenshotManager.self) private var screenshotManager
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettingsAction
 
     var body: some View {
         Menu("Capture") {
@@ -92,7 +93,10 @@ private struct MenuBarCommands: View {
             showMainWindow()
         }
         Divider()
-        SettingsLink()
+        Button("Settings...") {
+            openSettings()
+        }
+        .keyboardShortcut(",", modifiers: .command)
         Divider()
         Button("Quit") {
             NSApp.terminate(nil)
@@ -111,6 +115,18 @@ private struct MenuBarCommands: View {
     private func showMainWindow() {
         openWindow(id: mainWindowID)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// `SettingsLink` and `showSettingsWindow:` are no-ops when the app is in
+    /// `.accessory` mode and not yet frontmost — activation isn't synchronous,
+    /// so a same-tick selector dispatch lands before the app is active. Force
+    /// activation, then run the SwiftUI `openSettings` action on the next
+    /// runloop tick when the activation has taken effect.
+    private func openSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async {
+            try? openSettingsAction()
+        }
     }
 }
 

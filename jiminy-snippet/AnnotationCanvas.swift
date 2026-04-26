@@ -21,6 +21,10 @@ struct AnnotationCanvas: View {
     let maxScale: CGFloat
     @Binding var cropMode: Bool
     @Binding var cropRect: CGRect?
+    /// Suggested filename for drag-out exports. Falls back to "screenshot.png"
+    /// when nil so the canvas can produce a sensible promise even before the
+    /// user has saved.
+    var dragOutFilename: String?
     var onCropApply: () -> Void = {}
     var onCropCancel: () -> Void = {}
     /// Called immediately before any discrete edit that mutates `arrows`,
@@ -75,6 +79,7 @@ struct AnnotationCanvas: View {
                 ZStack(alignment: .topLeading) {
                     annotationCanvas
                     gestureLayer
+                    dragOutLayer
 
                     if let editingId = editing?.id,
                        let annotation = texts.first(where: { $0.id == editingId }) {
@@ -311,6 +316,43 @@ struct AnnotationCanvas: View {
                     }
             )
             .allowsHitTesting(editing == nil)
+    }
+
+    // MARK: - Drag-Out Layer
+
+    /// Sits above the gesture layer and only claims clicks that land on
+    /// empty image background while no tool/crop/edit is active. Hands those
+    /// clicks to AppKit so the canvas image can be dragged out into Finder,
+    /// Slack, Mail, etc.
+    private var dragOutLayer: some View {
+        DragOutHandle(
+            makeSource: { dragOutSource() },
+            isEmptySpace: { canStartDragOut(at: $0) },
+            onClickWithoutDrag: { selectedAnnotationId = nil }
+        )
+        .frame(width: imageSize.width, height: imageSize.height)
+        .allowsHitTesting(editing == nil)
+    }
+
+    private func dragOutSource() -> DragOutSource? {
+        DragOutSource(
+            image: image,
+            arrows: arrows,
+            texts: texts,
+            rectangles: rectangles,
+            suggestedFilename: dragOutFilename ?? "screenshot.png"
+        )
+    }
+
+    /// True when starting a drag at `point` should trigger a system drag-out
+    /// rather than any annotation interaction. Mirrors the conditions in
+    /// `beginDrag` so we never steal clicks from drawing, selection, or panning.
+    private func canStartDragOut(at point: CGPoint) -> Bool {
+        if cropMode { return false }
+        if selectedTool != nil { return false }
+        if editing != nil { return false }
+        if hitTest(at: point) != nil { return false }
+        return true
     }
 
     // MARK: - Editing Overlay
