@@ -160,6 +160,7 @@ private struct ZoomMenuItems: View {
         Button("Zoom to Fit") {
             zoomToFit?()
         }
+        .keyboardShortcut("0", modifiers: .command)
         .disabled(zoomToFit == nil)
 
         Button("Zoom to Actual Size") {
