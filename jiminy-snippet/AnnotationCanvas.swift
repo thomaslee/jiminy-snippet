@@ -43,7 +43,6 @@ struct AnnotationCanvas: View {
     @State private var lastTapLocation: CGPoint?
     @State private var keyMonitor: Any?
     @State private var scrollMonitor: Any?
-    @State private var handleMode: HandleMode = .resize
 
     // Scroll view state used to keep the viewport centred over the same
     // image-space point when `scale` changes.
@@ -107,9 +106,6 @@ struct AnnotationCanvas: View {
         }
         .onChange(of: scale) { oldValue, newValue in
             recenterAfterZoom(from: oldValue, to: newValue)
-        }
-        .onChange(of: selectedAnnotationId) {
-            handleMode = .resize
         }
         .onAppear {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -199,7 +195,7 @@ struct AnnotationCanvas: View {
                 AnnotationRenderer.drawText(annotation, resolved: resolved, size: size, in: &context)
                 if selectedAnnotationId == annotation.id {
                     AnnotationRenderer.drawTextSelection(
-                        annotation, size: size, handleMode: handleMode, in: &context
+                        annotation, size: size, in: &context
                     )
                 }
             }
@@ -441,9 +437,30 @@ struct AnnotationCanvas: View {
                 $0.rect = initial.offsetBy(dx: translation.width, dy: translation.height)
             }
 
-        case .resizingRectangle(let id, let initial, let handle):
+        case .resizingRectangle(let id, let initial, let handle, let rotation):
+            // Project the canvas-space drag translation into the rect's local
+            // rotated frame so dragging the "right" handle moves along the
+            // rect's local x axis even when the rect is at a non-zero angle.
+            let rad = -rotation * .pi / 180
+            let cosA = cos(rad), sinA = sin(rad)
+            let localTrans = CGSize(
+                width:  translation.width * cosA - translation.height * sinA,
+                height: translation.width * sinA + translation.height * cosA
+            )
             rectangles.update(id: id) {
-                $0.rect = resizedRect(initial: initial, handle: handle, translation: translation)
+                $0.rect = resizedRotatedRect(
+                    initial: initial, rotation: rotation,
+                    handle: handle, localTranslation: localTrans
+                )
+            }
+
+        case .rotatingRectangle(let id, let initialRotation, let referenceAngle, let center):
+            rectangles.update(id: id) { rectangle in
+                let currentAngle = atan2(point.y - center.y, point.x - center.x) * 180 / .pi
+                rectangle.rotation = initialRotation + (currentAngle - referenceAngle)
+                // `rect` is the unrotated bounds and the renderer pivots
+                // around its center, so leaving `rect` untouched keeps the
+                // rotation anchored at `center`.
             }
 
         case .movingText(let id, let initial):
@@ -491,10 +508,25 @@ struct AnnotationCanvas: View {
                 )
             }
 
-        case .rotatingText(let id, let initialRotation, let referenceAngle, let center):
+        case .rotatingText(let id, let initialRotation, let referenceAngle, let center,
+                           let paddedWidth, let paddedHeight, let scaleX, let scaleY):
             texts.update(id: id) { text in
                 let currentAngle = atan2(point.y - center.y, point.x - center.x) * 180 / .pi
-                text.rotation = initialRotation + (currentAngle - referenceAngle)
+                let newRotation = initialRotation + (currentAngle - referenceAngle)
+                text.rotation = newRotation
+
+                // The renderer pivots around `position` (the box's top-left),
+                // so rotating in place would whip the text around that corner.
+                // Recompute `position` each frame so the box's visual center
+                // stays pinned at `center` regardless of angle.
+                let rad = newRotation * .pi / 180
+                let halfW = paddedWidth * scaleX / 2
+                let halfH = paddedHeight * scaleY / 2
+                let cosA = cos(rad), sinA = sin(rad)
+                text.position = CGPoint(
+                    x: center.x - (halfW * cosA - halfH * sinA),
+                    y: center.y - (halfW * sinA + halfH * cosA)
+                )
             }
         }
     }
@@ -539,15 +571,11 @@ struct AnnotationCanvas: View {
             guard let annotation = texts.first(where: { $0.id == id }) else { return nil }
             switch zone {
             case .handle(let handlePos):
-                return handleMode == .rotate
-                    ? beginRotation(for: annotation, from: startPoint)
-                    : beginTextScaling(for: annotation, handle: handlePos)
+                return beginTextScaling(for: annotation, handle: handlePos)
+            case .rotateHandle:
+                return beginRotation(for: annotation, from: startPoint)
             case .body:
                 return .movingText(id: id, initialPosition: annotation.position)
-            case .exterior:
-                return handleMode == .rotate
-                    ? beginRotation(for: annotation, from: startPoint)
-                    : nil
             default:
                 return nil
             }
@@ -562,12 +590,35 @@ struct AnnotationCanvas: View {
                 return .resizingRectangle(
                     id: id,
                     initialRect: rectangle.rect.standardized,
-                    handle: handlePos
+                    handle: handlePos,
+                    rotation: rectangle.rotation
                 )
+            case .rotateHandle:
+                return beginRectangleRotation(for: rectangle, from: startPoint)
             default:
                 return nil
             }
         }
+    }
+
+    /// Builds a `rotatingRectangle` drag operation anchored at the rect's
+    /// visual center.
+    private func beginRectangleRotation(
+        for rectangle: RectangleAnnotation,
+        from startPoint: CGPoint
+    ) -> DragOperation {
+        let bounds = rectangle.rect.standardized
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let referenceAngle = atan2(
+            startPoint.y - center.y,
+            startPoint.x - center.x
+        ) * 180 / .pi
+        return .rotatingRectangle(
+            id: rectangle.id,
+            initialRotation: rectangle.rotation,
+            referenceAngle: referenceAngle,
+            center: center
+        )
     }
 
     private func handleDragEnded(_ value: DragGesture.Value) {
@@ -595,7 +646,7 @@ struct AnnotationCanvas: View {
                 selectedAnnotationId = rectangle.id
             }
             selectedTool = nil
-        } else if case .resizingRectangle(let id, _, _) = dragOperation {
+        } else if case .resizingRectangle(let id, _, _, _) = dragOperation {
             // Normalize at the end of a resize so flipped rects are stored
             // with positive width/height. Hit testing already standardizes,
             // but keeping the stored value tidy avoids surprises elsewhere.
@@ -647,12 +698,7 @@ struct AnnotationCanvas: View {
             switch hit {
             case .arrow(let id, _): selectedAnnotationId = id
             case .rectangle(let id, _): selectedAnnotationId = id
-            case .text(let id, _):
-                if id == selectedAnnotationId {
-                    handleMode = handleMode == .resize ? .rotate : .resize
-                } else {
-                    selectedAnnotationId = id
-                }
+            case .text(let id, _): selectedAnnotationId = id
             }
         } else {
             selectedAnnotationId = nil
@@ -723,6 +769,7 @@ struct AnnotationCanvas: View {
         for annotation: TextAnnotation,
         from startPoint: CGPoint
     ) -> DragOperation {
+        let padded = RenderConstants.paddedTextSize(AnnotationRenderer.measureText(annotation))
         let center = textCenter(for: annotation)
         let referenceAngle = atan2(
             startPoint.y - center.y,
@@ -732,7 +779,11 @@ struct AnnotationCanvas: View {
             id: annotation.id,
             initialRotation: annotation.rotation,
             referenceAngle: referenceAngle,
-            center: center
+            center: center,
+            paddedWidth: padded.width,
+            paddedHeight: padded.height,
+            scaleX: annotation.scaleX,
+            scaleY: annotation.scaleY
         )
     }
 
@@ -845,35 +896,60 @@ struct AnnotationCanvas: View {
         scrollPosition.scrollTo(point: newOffset)
     }
 
-    /// Computes the new rect produced by dragging a rectangle handle by
-    /// `translation`. The returned rect may be non-standardized (negative
-    /// width/height) while the user drags past the opposite edge — callers
-    /// standardize at the end of the drag.
-    private func resizedRect(
+    /// Computes the new rect produced by dragging a handle on a rotated
+    /// rectangle. `localTranslation` is the canvas-space drag delta already
+    /// rotated into the rect's local frame, so handle math can be done as if
+    /// the rect were axis-aligned. The result preserves the anchor (the
+    /// edge/corner opposite to the dragged handle) at its canvas position.
+    /// May be non-standardized while dragging past the opposite edge —
+    /// callers standardize at the end of the drag.
+    private func resizedRotatedRect(
         initial: CGRect,
+        rotation: Double,
         handle: HandlePosition,
-        translation: CGSize
+        localTranslation: CGSize
     ) -> CGRect {
-        var minX = initial.minX
-        var minY = initial.minY
-        var maxX = initial.maxX
-        var maxY = initial.maxY
+        // Work in a local frame centred on the initial rect's center, where
+        // the unrotated rect spans (-w/2 ... w/2, -h/2 ... h/2).
+        let halfW = initial.width / 2
+        let halfH = initial.height / 2
+        var lMinX = -halfW, lMaxX = halfW
+        var lMinY = -halfH, lMaxY = halfH
 
-        let dx = translation.width
-        let dy = translation.height
-
+        let dx = localTranslation.width
+        let dy = localTranslation.height
         switch handle {
-        case .topLeft:     minX += dx; minY += dy
-        case .top:                     minY += dy
-        case .topRight:    maxX += dx; minY += dy
-        case .left:        minX += dx
-        case .right:       maxX += dx
-        case .bottomLeft:  minX += dx; maxY += dy
-        case .bottom:                  maxY += dy
-        case .bottomRight: maxX += dx; maxY += dy
+        case .topLeft:     lMinX += dx; lMinY += dy
+        case .top:                      lMinY += dy
+        case .topRight:    lMaxX += dx; lMinY += dy
+        case .left:        lMinX += dx
+        case .right:       lMaxX += dx
+        case .bottomLeft:  lMinX += dx; lMaxY += dy
+        case .bottom:                   lMaxY += dy
+        case .bottomRight: lMaxX += dx; lMaxY += dy
         }
 
-        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        let newWidth = lMaxX - lMinX
+        let newHeight = lMaxY - lMinY
+        // Local-frame center of the new rect, relative to the initial center.
+        let localCenter = CGPoint(x: (lMinX + lMaxX) / 2, y: (lMinY + lMaxY) / 2)
+
+        // Rotate the local center back into canvas space and add to the
+        // initial center to find where the new rect's center should sit.
+        let rad = rotation * .pi / 180
+        let cosA = cos(rad), sinA = sin(rad)
+        let initialCenter = CGPoint(x: initial.midX, y: initial.midY)
+        let newCenter = CGPoint(
+            x: initialCenter.x + localCenter.x * cosA - localCenter.y * sinA,
+            y: initialCenter.y + localCenter.x * sinA + localCenter.y * cosA
+        )
+
+        return CGRect(
+            x: newCenter.x - newWidth / 2,
+            y: newCenter.y - newHeight / 2,
+            width: newWidth,
+            height: newHeight
+        )
     }
 
     /// Returns the center of a text annotation's scaled bounding box in canvas space.
@@ -894,11 +970,6 @@ struct AnnotationCanvas: View {
 private struct EditingState {
     let id: UUID
     let originalText: String
-}
-
-enum HandleMode {
-    case resize
-    case rotate
 }
 
 /// Which axis a text scaling operation affects.
@@ -923,7 +994,18 @@ private enum DragOperation {
     case croppingSelection(start: CGPoint, end: CGPoint)
     case movingArrow(id: UUID, initialStart: CGPoint, initialEnd: CGPoint, mask: ArrowEndpointMask)
     case movingRectangle(id: UUID, initialRect: CGRect)
-    case resizingRectangle(id: UUID, initialRect: CGRect, handle: HandlePosition)
+    case resizingRectangle(
+        id: UUID,
+        initialRect: CGRect,
+        handle: HandlePosition,
+        rotation: Double
+    )
+    case rotatingRectangle(
+        id: UUID,
+        initialRotation: Double,
+        referenceAngle: Double,
+        center: CGPoint
+    )
     case movingText(id: UUID, initialPosition: CGPoint)
     case scalingText(
         id: UUID,
@@ -935,7 +1017,16 @@ private enum DragOperation {
         paddedHeight: CGFloat,
         initialRef: CGFloat
     )
-    case rotatingText(id: UUID, initialRotation: Double, referenceAngle: Double, center: CGPoint)
+    case rotatingText(
+        id: UUID,
+        initialRotation: Double,
+        referenceAngle: Double,
+        center: CGPoint,
+        paddedWidth: CGFloat,
+        paddedHeight: CGFloat,
+        scaleX: CGFloat,
+        scaleY: CGFloat
+    )
 }
 
 // MARK: - Helpers

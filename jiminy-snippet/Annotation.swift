@@ -67,6 +67,9 @@ struct RectangleAnnotation: Identifiable, Equatable {
     var color: Color
     var lineWidth: CGFloat = RectangleAnnotation.defaultLineWidth
     var style: RectangleFillStyle
+    /// Rotation in degrees, applied around the rect's visual center. The
+    /// stored `rect` always describes the unrotated bounds.
+    var rotation: Double = 0
 
     /// Returns a copy with a fresh id and the rect shifted by `offset`, so the
     /// duplicate is visually distinguishable from the original.
@@ -75,7 +78,8 @@ struct RectangleAnnotation: Identifiable, Equatable {
             rect: rect.offsetBy(dx: offset.width, dy: offset.height),
             color: color,
             lineWidth: lineWidth,
-            style: style
+            style: style,
+            rotation: rotation
         )
     }
 }

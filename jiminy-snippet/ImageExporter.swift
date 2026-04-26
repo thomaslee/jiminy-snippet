@@ -141,25 +141,31 @@ struct ImageExporter {
                 AnnotationRenderer.arrowOutlineColor(for: rectangle.color)
             ).cgColor
             let outlineWidth = AnnotationRenderer.arrowOutlineWidth(for: rectangle.lineWidth)
+            let w = bounds.width
+            let h = bounds.height
+            // Rotate around the rect's visual center to match on-screen rendering.
+            let localRect = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
 
             context.saveGState()
+            context.translateBy(x: bounds.midX, y: bounds.midY)
+            context.rotate(by: rectangle.rotation * .pi / 180)
             context.setLineJoin(.miter)
 
             switch rectangle.style {
             case .filled:
                 context.setFillColor(fillColor)
-                context.fill(bounds)
+                context.fill(localRect)
                 context.setStrokeColor(outlineColor)
                 context.setLineWidth(outlineWidth)
-                context.stroke(bounds)
+                context.stroke(localRect)
             case .outlined:
                 let strokeW = rectangle.lineWidth * 2.5
                 context.setStrokeColor(outlineColor)
                 context.setLineWidth(strokeW + outlineWidth * 2)
-                context.stroke(bounds)
+                context.stroke(localRect)
                 context.setStrokeColor(fillColor)
                 context.setLineWidth(strokeW)
-                context.stroke(bounds)
+                context.stroke(localRect)
             }
 
             context.restoreGState()

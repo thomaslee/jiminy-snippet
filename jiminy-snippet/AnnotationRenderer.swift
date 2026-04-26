@@ -16,6 +16,24 @@ enum RenderConstants {
     static let textPaddingH: CGFloat = 4
     static let textPaddingV: CGFloat = 2
 
+    /// Chunky square selection handles — filled white with a thick accent
+    /// border. Sized to read clearly without dominating small annotations.
+    static let squareHandleSize: CGFloat = 11
+    static let squareHandleBorder: CGFloat = 2
+    static let squareHandleCornerRadius: CGFloat = 1.5
+
+    /// Pale-blue circular rotation handle. Slightly larger than the squares
+    /// because circles read smaller at equal pixel dimensions.
+    static let rotateHandleSize: CGFloat = 13
+
+    /// Distance from the top-center handle to the rotation handle, measured
+    /// in the annotation's local (pre-rotation) space.
+    static let rotateHandleOffset: CGFloat = 22
+
+    /// Width of the pale connector line drawn between the rotation handle
+    /// and the top-center resize handle.
+    static let handleConnectorWidth: CGFloat = 1.5
+
     /// The text's measured size plus padding on all sides.
     static func paddedTextSize(_ measured: CGSize) -> CGSize {
         CGSize(
@@ -110,6 +128,7 @@ enum AnnotationRenderer {
     /// rectangles use a chunky double-stroke (contrast outline + color fill
     /// stroke) that matches the arrow body's visual weight; filled rectangles
     /// fill the interior and stroke a thin contrast border around the edge.
+    /// Rotation is applied around the rect's visual center.
     static func drawRectangle(
         _ rectangle: RectangleAnnotation,
         selected: Bool,
@@ -118,65 +137,67 @@ enum AnnotationRenderer {
         let bounds = rectangle.rect.standardized
         guard bounds.width > 0, bounds.height > 0 else { return }
 
-        let path = Path(bounds)
         let outlineColor = arrowOutlineColor(for: rectangle.color)
         let outlineW = arrowOutlineWidth(for: rectangle.lineWidth)
+        let w = bounds.width
+        let h = bounds.height
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let localRect = CGRect(x: 0, y: 0, width: w, height: h)
+        let path = Path(localRect)
 
-        if selected {
-            // Accent-color glow, drawn first so it sits behind the body.
-            let totalVisible: CGFloat
+        context.drawLayer { ctx in
+            // Pivot around the rect's visual center so rotation feels natural.
+            ctx.translateBy(x: center.x, y: center.y)
+            ctx.rotate(by: .degrees(rectangle.rotation))
+            ctx.translateBy(x: -w / 2, y: -h / 2)
+
+            if selected {
+                // Accent-color glow, drawn first so it sits behind the body.
+                let totalVisible: CGFloat
+                switch rectangle.style {
+                case .outlined:
+                    totalVisible = rectangle.lineWidth * 2.5 + outlineW * 2
+                case .filled:
+                    totalVisible = outlineW
+                }
+                ctx.stroke(
+                    path,
+                    with: .color(.accentColor.opacity(0.4)),
+                    style: StrokeStyle(lineWidth: totalVisible + 8, lineJoin: .miter)
+                )
+            }
+
             switch rectangle.style {
             case .outlined:
-                totalVisible = rectangle.lineWidth * 2.5 + outlineW * 2
+                let strokeW = rectangle.lineWidth * 2.5
+                ctx.stroke(
+                    path,
+                    with: .color(outlineColor),
+                    style: StrokeStyle(lineWidth: strokeW + outlineW * 2, lineJoin: .miter)
+                )
+                ctx.stroke(
+                    path,
+                    with: .color(rectangle.color),
+                    style: StrokeStyle(lineWidth: strokeW, lineJoin: .miter)
+                )
             case .filled:
-                totalVisible = outlineW
+                ctx.fill(path, with: .color(rectangle.color))
+                ctx.stroke(
+                    path,
+                    with: .color(outlineColor),
+                    style: StrokeStyle(lineWidth: outlineW, lineJoin: .miter)
+                )
             }
-            context.stroke(
-                path,
-                with: .color(.accentColor.opacity(0.4)),
-                style: StrokeStyle(lineWidth: totalVisible + 8, lineJoin: .miter)
-            )
-        }
 
-        switch rectangle.style {
-        case .outlined:
-            let strokeW = rectangle.lineWidth * 2.5
-            context.stroke(
-                path,
-                with: .color(outlineColor),
-                style: StrokeStyle(lineWidth: strokeW + outlineW * 2, lineJoin: .miter)
-            )
-            context.stroke(
-                path,
-                with: .color(rectangle.color),
-                style: StrokeStyle(lineWidth: strokeW, lineJoin: .miter)
-            )
-        case .filled:
-            context.fill(path, with: .color(rectangle.color))
-            context.stroke(
-                path,
-                with: .color(outlineColor),
-                style: StrokeStyle(lineWidth: outlineW, lineJoin: .miter)
-            )
-        }
-
-        if selected {
-            drawRectangleResizeHandles(bounds: bounds, in: &context)
-        }
-    }
-
-    /// Draws the eight L-bracket corner + side-tick handles around a
-    /// rectangle. Reuses the same helpers text selection uses — just
-    /// translated to the rectangle's origin instead of the text origin.
-    private static func drawRectangleResizeHandles(
-        bounds: CGRect,
-        in context: inout GraphicsContext
-    ) {
-        let arm = RenderConstants.handleArmLength
-        context.drawLayer { ctx in
-            ctx.translateBy(x: bounds.minX, y: bounds.minY)
-            drawResizeCorners(w: bounds.width, h: bounds.height, arm: arm, in: &ctx)
-            drawResizeSideTicks(w: bounds.width, h: bounds.height, in: &ctx)
+            if selected {
+                ctx.stroke(
+                    Path(roundedRect: localRect, cornerRadius: 4),
+                    with: .color(.accentColor.opacity(0.7)), lineWidth: 1.5
+                )
+                drawRotateConnector(w: w, in: &ctx)
+                drawSquareHandles(w: w, h: h, in: &ctx)
+                drawRotateHandle(at: rotateHandleLocalPoint(w: w), in: &ctx)
+            }
         }
     }
 
@@ -247,11 +268,14 @@ enum AnnotationRenderer {
         max(1.5, fontSize * 0.08)
     }
 
-    /// Draws selection chrome and handles for a text annotation.
+    /// Draws selection chrome and handles for a text annotation: a thin
+    /// selection rectangle, eight chunky square resize handles, and a
+    /// dedicated rotation handle floating above the top edge — connected to
+    /// the top-center handle by a pale accent line so the rotation affordance
+    /// reads as part of the same selection chrome.
     static func drawTextSelection(
         _ annotation: TextAnnotation,
         size: CGSize,
-        handleMode: HandleMode,
         in context: inout GraphicsContext
     ) {
         let padded = RenderConstants.paddedTextSize(size)
@@ -259,28 +283,27 @@ enum AnnotationRenderer {
             width: padded.width * annotation.scaleX,
             height: padded.height * annotation.scaleY
         )
-        let w = scaledSize.width
-        let h = scaledSize.height
-        let arm = RenderConstants.handleArmLength
 
         context.drawLayer { ctx in
             ctx.translateBy(x: annotation.position.x, y: annotation.position.y)
             ctx.rotate(by: .degrees(annotation.rotation))
 
-            // Selection border
             let rect = CGRect(origin: .zero, size: scaledSize)
             ctx.stroke(
                 Path(roundedRect: rect, cornerRadius: 4),
-                with: .color(.accentColor), lineWidth: 2
+                with: .color(.accentColor.opacity(0.7)), lineWidth: 1.5
             )
 
-            if handleMode == .resize {
-                drawResizeCorners(w: w, h: h, arm: arm, in: &ctx)
-                drawResizeSideTicks(w: w, h: h, in: &ctx)
-            } else {
-                drawRotateCorners(w: w, h: h, radius: arm, in: &ctx)
-            }
+            drawRotateConnector(w: scaledSize.width, in: &ctx)
+            drawSquareHandles(w: scaledSize.width, h: scaledSize.height, in: &ctx)
+            drawRotateHandle(at: rotateHandleLocalPoint(w: scaledSize.width), in: &ctx)
         }
+    }
+
+    /// Local-space position of the dedicated rotation handle, sitting above
+    /// the top-center resize handle.
+    static func rotateHandleLocalPoint(w: CGFloat) -> CGPoint {
+        CGPoint(x: w / 2, y: -RenderConstants.rotateHandleOffset)
     }
 
     // MARK: - Handles
@@ -299,91 +322,67 @@ enum AnnotationRenderer {
         context.stroke(circle, with: .color(.accentColor), lineWidth: 2)
     }
 
-    // MARK: - Resize Handles (L-shaped corner brackets + side ticks)
+    // MARK: - Square Handles
 
-    private static func drawResizeCorners(
-        w: CGFloat, h: CGFloat, arm: CGFloat,
-        in context: inout GraphicsContext
-    ) {
-        // Each corner: an L-shaped bracket with arms extending along the bounding box edges.
-        let corners: [(CGPoint, CGFloat, CGFloat, CGFloat, CGFloat)] = [
-            // (corner point, arm1 dx, arm1 dy, arm2 dx, arm2 dy)
-            (CGPoint(x: 0, y: 0),  1,  0,  0,  1),  // topLeft: right + down
-            (CGPoint(x: w, y: 0), -1,  0,  0,  1),  // topRight: left + down
-            (CGPoint(x: w, y: h), -1,  0,  0, -1),  // bottomRight: left + up
-            (CGPoint(x: 0, y: h),  1,  0,  0, -1),  // bottomLeft: right + up
-        ]
-        for (pt, dx1, dy1, dx2, dy2) in corners {
-            var path = Path()
-            path.move(to: CGPoint(x: pt.x + dx1 * arm, y: pt.y + dy1 * arm))
-            path.addLine(to: pt)
-            path.addLine(to: CGPoint(x: pt.x + dx2 * arm, y: pt.y + dy2 * arm))
-            strokeOutlined(path, in: &context)
-        }
-    }
-
-    private static func drawResizeSideTicks(
+    /// Draws the eight chunky square handles around a w×h bounding box (four
+    /// corners + four side midpoints). Local coordinates: caller is expected
+    /// to have translated/rotated the context so (0,0) is the box top-left.
+    static func drawSquareHandles(
         w: CGFloat, h: CGFloat,
         in context: inout GraphicsContext
     ) {
-        let tick: CGFloat = 6
-        // Side ticks: short perpendicular bars crossing each edge midpoint.
-        let ticks: [(CGPoint, CGFloat, CGFloat)] = [
-            // (midpoint, dx, dy) — tick extends ±(dx,dy) from midpoint
-            (CGPoint(x: w / 2, y: 0), 0, tick / 2),    // top: vertical tick
-            (CGPoint(x: w / 2, y: h), 0, tick / 2),    // bottom: vertical tick
-            (CGPoint(x: 0, y: h / 2), tick / 2, 0),    // left: horizontal tick
-            (CGPoint(x: w, y: h / 2), tick / 2, 0),    // right: horizontal tick
+        let positions: [CGPoint] = [
+            CGPoint(x: 0,     y: 0),     CGPoint(x: w / 2, y: 0),     CGPoint(x: w, y: 0),
+            CGPoint(x: 0,     y: h / 2),                              CGPoint(x: w, y: h / 2),
+            CGPoint(x: 0,     y: h),     CGPoint(x: w / 2, y: h),     CGPoint(x: w, y: h),
         ]
-        for (pt, dx, dy) in ticks {
-            var path = Path()
-            path.move(to: CGPoint(x: pt.x - dx, y: pt.y - dy))
-            path.addLine(to: CGPoint(x: pt.x + dx, y: pt.y + dy))
-            strokeOutlined(path, in: &context)
+        for pt in positions {
+            drawSquareHandle(at: pt, in: &context)
         }
     }
 
-    // MARK: - Rotate Handles (quarter-circle arcs at each corner)
-
-    private static func drawRotateCorners(
-        w: CGFloat, h: CGFloat, radius: CGFloat,
-        in context: inout GraphicsContext
-    ) {
-        // Each corner: a quarter-circle arc curving outside the bounding box.
-        // Same shape as the resize L-brackets but with a rounded 90° corner.
-        //
-        // Screen coordinates: 0°=right, 90°=down, 180°=left, 270°=up.
-        // clockwise: false in SwiftUI = clockwise on screen.
-        let inset: CGFloat = 3
-        let arcs: [(center: CGPoint, start: Double, end: Double)] = [
-            (CGPoint(x: inset,     y: inset),     180, 270),  // topLeft
-            (CGPoint(x: w - inset, y: inset),     270, 360),  // topRight
-            (CGPoint(x: w - inset, y: h - inset),   0,  90),  // bottomRight
-            (CGPoint(x: inset,     y: h - inset),  90, 180),  // bottomLeft
-        ]
-        for (center, startDeg, endDeg) in arcs {
-            var arc = Path()
-            arc.addArc(
-                center: center, radius: radius,
-                startAngle: .degrees(startDeg), endAngle: .degrees(endDeg),
-                clockwise: false
-            )
-            strokeOutlined(arc, in: &context)
-        }
+    /// Draws a single chunky square handle centered on `point`: filled white
+    /// fill with a thick accent border, slight corner rounding for polish.
+    static func drawSquareHandle(at point: CGPoint, in context: inout GraphicsContext) {
+        let s = RenderConstants.squareHandleSize
+        let rect = CGRect(x: point.x - s / 2, y: point.y - s / 2, width: s, height: s)
+        let path = Path(roundedRect: rect, cornerRadius: RenderConstants.squareHandleCornerRadius)
+        context.fill(path, with: .color(.white))
+        context.stroke(
+            path,
+            with: .color(.accentColor),
+            style: StrokeStyle(lineWidth: RenderConstants.squareHandleBorder, lineJoin: .miter)
+        )
     }
 
-    /// Draws a path with a white foreground stroke and accent outline for contrast.
-    private static func strokeOutlined(_ path: Path, in context: inout GraphicsContext) {
-        let outline = StrokeStyle(
-            lineWidth: RenderConstants.handleOutlineWidth,
-            lineCap: .round, lineJoin: .round
+    /// Pale-blue circular rotation handle. Distinct shape + colour from the
+    /// square resize handles so the affordance reads instantly as "spin"
+    /// rather than "drag a side".
+    static func drawRotateHandle(at point: CGPoint, in context: inout GraphicsContext) {
+        let s = RenderConstants.rotateHandleSize
+        let rect = CGRect(x: point.x - s / 2, y: point.y - s / 2, width: s, height: s)
+        let path = Path(ellipseIn: rect)
+        // Pale-blue tint mixed with white, fully opaque so it doesn't blend
+        // into whatever sits behind the annotation.
+        context.fill(path, with: .color(Color(red: 0.74, green: 0.85, blue: 0.98)))
+        context.stroke(
+            path,
+            with: .color(.accentColor),
+            style: StrokeStyle(lineWidth: RenderConstants.squareHandleBorder)
         )
-        let fill = StrokeStyle(
-            lineWidth: RenderConstants.handleLineWidth,
-            lineCap: .round, lineJoin: .round
+    }
+
+    /// Pale accent line linking the top-center resize handle to the rotation
+    /// handle above it, so the two read as a single piece of selection chrome.
+    private static func drawRotateConnector(w: CGFloat, in context: inout GraphicsContext) {
+        var line = Path()
+        line.move(to: CGPoint(x: w / 2, y: 0))
+        line.addLine(to: CGPoint(x: w / 2, y: -RenderConstants.rotateHandleOffset))
+        context.stroke(
+            line,
+            with: .color(.accentColor.opacity(0.5)),
+            style: StrokeStyle(lineWidth: RenderConstants.handleConnectorWidth, lineCap: .round)
         )
-        context.stroke(path, with: .color(.accentColor), style: outline)
-        context.stroke(path, with: .color(.white), style: fill)
     }
 
     // MARK: - Text Measurement (NSFont, for hit testing)
