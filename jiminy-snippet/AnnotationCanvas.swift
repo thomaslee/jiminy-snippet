@@ -252,9 +252,109 @@ struct AnnotationCanvas: View {
             if cropMode {
                 drawCropOverlay(in: &context)
             }
+
+            if case .marqueeSelecting(let start, let end, _, _) = dragOperation {
+                drawMarquee(start: start, end: end, in: &context)
+            }
         }
         .frame(width: imageSize.width, height: imageSize.height)
         .allowsHitTesting(false)
+    }
+
+    private func marqueeRect(start: CGPoint, end: CGPoint) -> CGRect {
+        CGRect(
+            x: min(start.x, end.x),
+            y: min(start.y, end.y),
+            width: abs(end.x - start.x),
+            height: abs(end.y - start.y)
+        )
+    }
+
+    /// Translucent fill plus a 1-device-pixel dashed outline. Stroke width is
+    /// inverse-scaled so the marquee reads the same regardless of zoom.
+    private func drawMarquee(start: CGPoint, end: CGPoint, in context: inout GraphicsContext) {
+        let rect = marqueeRect(start: start, end: end)
+        let path = Path(rect)
+        context.fill(path, with: .color(.accentColor.opacity(0.12)))
+        let lineWidth = 1.0 / max(scale, 0.1)
+        context.stroke(
+            path,
+            with: .color(.accentColor.opacity(0.85)),
+            style: StrokeStyle(lineWidth: lineWidth, dash: [4 * lineWidth, 3 * lineWidth])
+        )
+    }
+
+    /// Returns the ids of every annotation whose axis-aligned bounding box
+    /// intersects `rect`. Touching counts (Finder-style), so a marquee that
+    /// merely grazes the edge of an annotation is enough to select it.
+    private func annotationsIntersecting(_ rect: CGRect) -> Set<UUID> {
+        var ids: Set<UUID> = []
+        for arrow in arrows where arrowBoundingBox(arrow).intersects(rect) {
+            ids.insert(arrow.id)
+        }
+        for rectangle in rectangles where rectangleBoundingBox(rectangle).intersects(rect) {
+            ids.insert(rectangle.id)
+        }
+        for text in texts where textBoundingBox(text).intersects(rect) {
+            ids.insert(text.id)
+        }
+        return ids
+    }
+
+    private func arrowBoundingBox(_ arrow: ArrowAnnotation) -> CGRect {
+        let minX = min(arrow.start.x, arrow.end.x)
+        let minY = min(arrow.start.y, arrow.end.y)
+        let maxX = max(arrow.start.x, arrow.end.x)
+        let maxY = max(arrow.start.y, arrow.end.y)
+        // Pad to roughly the arrow head's half-width so the marquee picks up
+        // the full visual extent of the arrow rather than just the centerline.
+        let pad = arrow.lineWidth * 3.2
+        return CGRect(
+            x: minX - pad, y: minY - pad,
+            width: (maxX - minX) + pad * 2, height: (maxY - minY) + pad * 2
+        )
+    }
+
+    private func rectangleBoundingBox(_ rectangle: RectangleAnnotation) -> CGRect {
+        let bounds = rectangle.rect.standardized
+        guard rectangle.rotation != 0 else { return bounds }
+        let rad = rectangle.rotation * .pi / 180
+        let cosA = abs(cos(rad))
+        let sinA = abs(sin(rad))
+        let w = bounds.width * cosA + bounds.height * sinA
+        let h = bounds.width * sinA + bounds.height * cosA
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        return CGRect(x: center.x - w / 2, y: center.y - h / 2, width: w, height: h)
+    }
+
+    private func textBoundingBox(_ annotation: TextAnnotation) -> CGRect {
+        let measured = AnnotationRenderer.measureText(annotation)
+        let padded = RenderConstants.paddedTextSize(measured)
+        let scaledSize = CGSize(
+            width: padded.width * annotation.scaleX,
+            height: padded.height * annotation.scaleY
+        )
+        let origin = annotation.position
+        guard annotation.rotation != 0 else {
+            return CGRect(origin: origin, size: scaledSize)
+        }
+        let rad = annotation.rotation * .pi / 180
+        let cosA = cos(rad), sinA = sin(rad)
+        let corners: [CGPoint] = [
+            CGPoint(x: 0, y: 0),
+            CGPoint(x: scaledSize.width, y: 0),
+            CGPoint(x: scaledSize.width, y: scaledSize.height),
+            CGPoint(x: 0, y: scaledSize.height),
+        ]
+        var minX = CGFloat.infinity, minY = CGFloat.infinity
+        var maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
+        for c in corners {
+            let x = origin.x + c.x * cosA - c.y * sinA
+            let y = origin.y + c.x * sinA + c.y * cosA
+            minX = min(minX, x); maxX = max(maxX, x)
+            minY = min(minY, y); maxY = max(maxY, y)
+        }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
     // MARK: - Crop Overlay
@@ -373,11 +473,14 @@ struct AnnotationCanvas: View {
     /// True when starting a drag at `point` should trigger a system drag-out
     /// rather than any annotation interaction. Mirrors the conditions in
     /// `beginDrag` so we never steal clicks from drawing, selection, or panning.
+    /// Requires the Option key — plain empty-space drags fall through to the
+    /// gesture layer so marquee selection can claim them.
     private func canStartDragOut(at point: CGPoint) -> Bool {
         if cropMode { return false }
         if selectedTool != nil { return false }
         if editing != nil { return false }
         if hitTest(at: point) != nil { return false }
+        if !NSEvent.modifierFlags.contains(.option) { return false }
         return true
     }
 
@@ -538,6 +641,17 @@ struct AnnotationCanvas: View {
                 )
             }
 
+        case .marqueeSelecting(let start, _, let initialSelection, let additive):
+            let rect = marqueeRect(start: start, end: point)
+            let inside = annotationsIntersecting(rect)
+            selectedAnnotationIds = additive
+                ? initialSelection.union(inside)
+                : inside
+            dragOperation = .marqueeSelecting(
+                start: start, end: point,
+                initialSelection: initialSelection, additive: additive
+            )
+
         case .movingMultiple(let initialArrows, let initialTexts, let initialRectangles):
             for (id, initial) in initialArrows {
                 arrows.update(id: id) { arrow in
@@ -597,15 +711,29 @@ struct AnnotationCanvas: View {
             return .creatingRectangle(start: startPoint, end: startPoint)
         }
 
-        // Shift is reserved for multi-select toggle on click. Letting a shift-
-        // drag start an annotation drag would change which annotation is being
-        // manipulated mid-gesture, which is jarring — and dragging multiple
-        // annotations at once isn't supported, so just bail.
-        if NSEvent.modifierFlags.contains(.shift) {
-            return nil
+        let isShift = NSEvent.modifierFlags.contains(.shift)
+
+        // Empty-space drag = marquee selection. Shift makes it additive (extends
+        // the existing selection); plain marquee replaces. Holding Option while
+        // dragging from empty space takes the drag-out path instead, but that's
+        // routed through DragOutHandle and never reaches this method.
+        guard let hit = hitTest(at: startPoint) else {
+            let initial = isShift ? selectedAnnotationIds : []
+            if !isShift {
+                selectedAnnotationIds.removeAll()
+            }
+            return .marqueeSelecting(
+                start: startPoint, end: startPoint,
+                initialSelection: initial, additive: isShift
+            )
         }
 
-        guard let hit = hitTest(at: startPoint) else { return nil }
+        // Shift-drag on an annotation: bail. Shift is reserved for the click-
+        // toggle behavior, and multi-selection drag of one item with shift held
+        // would be ambiguous (toggle? augment? translate?).
+        if isShift {
+            return nil
+        }
 
         // Body-drag on any member of a multi-selection moves the whole group
         // together. Handle drags don't reach this branch — handles aren't
@@ -1128,6 +1256,16 @@ private enum DragOperation {
         arrows: [UUID: (start: CGPoint, end: CGPoint)],
         texts: [UUID: CGPoint],
         rectangles: [UUID: CGRect]
+    )
+    /// Drag-rectangle (marquee) for selecting annotations en masse. Live-
+    /// updates `selectedAnnotationIds` as the user drags. `initialSelection`
+    /// is the set carried over from before the drag — non-empty only when
+    /// `additive` is true (Shift held), so plain marquees replace selection.
+    case marqueeSelecting(
+        start: CGPoint,
+        end: CGPoint,
+        initialSelection: Set<UUID>,
+        additive: Bool
     )
 }
 
