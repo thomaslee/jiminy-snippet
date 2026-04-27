@@ -213,6 +213,56 @@ enum AnnotationRenderer {
         }
     }
 
+    // MARK: - Pixelate Drawing
+
+    /// Renders the in-flight preview for the destructive pixelate tool by
+    /// stamping `pixelatedSource` (a pre-pixelated copy of the canvas image)
+    /// clipped to `rect`, then outlining the dragged region so the user can
+    /// clearly see what they're about to redact. Pixelation is destructive
+    /// on commit, so there's no persisted annotation to draw — only the
+    /// live drag preview lives here.
+    static func drawPixelatePreview(
+        rect: CGRect,
+        pixelatedSource: NSImage?,
+        canvasScale: CGFloat,
+        in context: inout GraphicsContext
+    ) {
+        let bounds = rect.standardized
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let path = Path(bounds)
+
+        context.drawLayer { ctx in
+            ctx.clip(to: path)
+            if let source = pixelatedSource {
+                ctx.draw(
+                    Image(nsImage: source),
+                    in: CGRect(origin: .zero, size: source.size)
+                )
+            } else {
+                ctx.fill(path, with: .color(.gray))
+            }
+        }
+
+        // Outline the drag rect so its edges are visible against busy
+        // pixelated content. Scale the stroke inversely so the border looks
+        // the same thickness regardless of zoom.
+        let strokeWidth = 1.5 / max(canvasScale, 0.1)
+        let dashUnit = max(strokeWidth * 3, 1)
+        context.stroke(
+            path,
+            with: .color(.white.opacity(0.95)),
+            style: StrokeStyle(lineWidth: strokeWidth)
+        )
+        context.stroke(
+            path,
+            with: .color(.black.opacity(0.85)),
+            style: StrokeStyle(
+                lineWidth: strokeWidth,
+                dash: [dashUnit, dashUnit]
+            )
+        )
+    }
+
     // MARK: - Text Drawing
 
     /// Resolves and measures a text annotation. Call once, then pass results to `drawText` and `drawTextSelection`.

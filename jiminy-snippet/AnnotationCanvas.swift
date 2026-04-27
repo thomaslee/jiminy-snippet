@@ -9,6 +9,11 @@ import SwiftUI
 
 struct AnnotationCanvas: View {
     let image: NSImage
+    /// Pre-pixelated copy of `image`, kept in sync by the parent. Used to
+    /// preview the destructive pixelate tool while the user drags. Optional
+    /// because the cache may be momentarily out of date right after the
+    /// underlying image changes.
+    let pixelatedImage: NSImage?
     @Binding var arrows: [ArrowAnnotation]
     @Binding var texts: [TextAnnotation]
     @Binding var rectangles: [RectangleAnnotation]
@@ -33,6 +38,10 @@ struct AnnotationCanvas: View {
     /// Called when an in-flight edit is abandoned (e.g. text editing cancelled)
     /// so the matching `onBeginEdit` snapshot can be discarded.
     var onDiscardEdit: () -> Void = {}
+    /// Invoked when the user finishes drawing a pixelate region. The owner
+    /// burns the rect into the underlying image — pixelation is destructive
+    /// by design so a redacted area can't later be moved or deleted.
+    var onApplyPixelate: (CGRect) -> Void = { _ in }
 
     // MARK: - Gesture State
 
@@ -247,6 +256,21 @@ struct AnnotationCanvas: View {
                     style: rectangleFillStyle
                 )
                 AnnotationRenderer.drawRectangle(draft, selected: false, showHandles: false, in: &context)
+            }
+
+            if case .creatingPixelate(let start, let end) = dragOperation {
+                let rect = CGRect(
+                    x: min(start.x, end.x),
+                    y: min(start.y, end.y),
+                    width: abs(end.x - start.x),
+                    height: abs(end.y - start.y)
+                )
+                AnnotationRenderer.drawPixelatePreview(
+                    rect: rect,
+                    pixelatedSource: pixelatedImage,
+                    canvasScale: scale,
+                    in: &context
+                )
             }
 
             if cropMode {
@@ -556,6 +580,9 @@ struct AnnotationCanvas: View {
         case .creatingRectangle(let start, _):
             dragOperation = .creatingRectangle(start: start, end: point)
 
+        case .creatingPixelate(let start, _):
+            dragOperation = .creatingPixelate(start: start, end: point)
+
         case .croppingSelection(let start, _):
             dragOperation = .croppingSelection(start: start, end: point)
 
@@ -590,7 +617,8 @@ struct AnnotationCanvas: View {
         case .rotatingRectangle(let id, let initialRotation, let referenceAngle, let center):
             rectangles.update(id: id) { rectangle in
                 let currentAngle = atan2(point.y - center.y, point.x - center.x) * 180 / .pi
-                rectangle.rotation = initialRotation + (currentAngle - referenceAngle)
+                let raw = initialRotation + (currentAngle - referenceAngle)
+                rectangle.rotation = snappedRotation(raw)
                 // `rect` is the unrotated bounds and the renderer pivots
                 // around its center, so leaving `rect` untouched keeps the
                 // rotation anchored at `center`.
@@ -674,7 +702,7 @@ struct AnnotationCanvas: View {
                            let paddedWidth, let paddedHeight, let scaleX, let scaleY):
             texts.update(id: id) { text in
                 let currentAngle = atan2(point.y - center.y, point.x - center.x) * 180 / .pi
-                let newRotation = initialRotation + (currentAngle - referenceAngle)
+                let newRotation = snappedRotation(initialRotation + (currentAngle - referenceAngle))
                 text.rotation = newRotation
 
                 // The renderer pivots around `position` (the box's top-left),
@@ -711,6 +739,11 @@ struct AnnotationCanvas: View {
             return .creatingRectangle(start: startPoint, end: startPoint)
         }
 
+        if selectedTool == .pixelate {
+            selectedAnnotationIds.removeAll()
+            return .creatingPixelate(start: startPoint, end: startPoint)
+        }
+
         let isShift = NSEvent.modifierFlags.contains(.shift)
 
         // Empty-space drag = marquee selection. Shift makes it additive (extends
@@ -730,8 +763,9 @@ struct AnnotationCanvas: View {
 
         // Shift-drag on an annotation: bail. Shift is reserved for the click-
         // toggle behavior, and multi-selection drag of one item with shift held
-        // would be ambiguous (toggle? augment? translate?).
-        if isShift {
+        // would be ambiguous (toggle? augment? translate?). Rotation handles
+        // are exempt — shift-drag from the rotate handle snaps to 45°.
+        if isShift && !hit.isRotateHandle {
             return nil
         }
 
@@ -791,6 +825,7 @@ struct AnnotationCanvas: View {
             default:
                 return nil
             }
+
         }
     }
 
@@ -858,6 +893,23 @@ struct AnnotationCanvas: View {
                 )
                 rectangles.append(rectangle)
                 selectedAnnotationIds = [rectangle.id]
+            }
+            selectedTool = nil
+        } else if case .creatingPixelate(let start, _) = dragOperation {
+            let end = value.location
+            let rect = CGRect(
+                x: min(start.x, end.x),
+                y: min(start.y, end.y),
+                width: abs(end.x - start.x),
+                height: abs(end.y - start.y)
+            )
+            if rect.width > 1, rect.height > 1 {
+                onApplyPixelate(rect)
+            } else {
+                // No region drawn — drop the snapshot taken at drag start so
+                // an accidental click on the pixelate tool doesn't burn an
+                // undo slot.
+                onDiscardEdit()
             }
             selectedTool = nil
         } else if case .resizingRectangle(let id, _, _, _) = dragOperation {
@@ -984,6 +1036,14 @@ struct AnnotationCanvas: View {
         onDiscardEdit()
         editing = nil
         focusedTextId = nil
+    }
+
+    /// If shift is held, snaps to the nearest 45° increment (0/45/90/...) so
+    /// users can lock annotations to canvas-aligned angles. Otherwise returns
+    /// `raw` unchanged.
+    private func snappedRotation(_ raw: Double) -> Double {
+        guard NSEvent.modifierFlags.contains(.shift) else { return raw }
+        return (raw / 45).rounded() * 45
     }
 
     /// Builds a `rotatingText` drag operation anchored at the annotation's center.
@@ -1213,6 +1273,7 @@ private enum DragOperation {
     case none
     case creatingArrow(start: CGPoint, end: CGPoint)
     case creatingRectangle(start: CGPoint, end: CGPoint)
+    case creatingPixelate(start: CGPoint, end: CGPoint)
     case croppingSelection(start: CGPoint, end: CGPoint)
     case movingArrow(id: UUID, initialStart: CGPoint, initialEnd: CGPoint, mask: ArrowEndpointMask)
     case movingRectangle(id: UUID, initialRect: CGRect)

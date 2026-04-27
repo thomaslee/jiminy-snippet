@@ -5,18 +5,22 @@
 //  Created by Tom on 4/2/26.
 //
 
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import SwiftUI
 
 enum AnnotationTool: String, CaseIterable {
     case arrow = "Arrow"
     case text = "Text"
     case rectangle = "Rectangle"
+    case pixelate = "Pixelate"
 
     var systemImage: String {
         switch self {
         case .arrow: "arrow.up.right"
         case .text: "textformat"
         case .rectangle: "rectangle"
+        case .pixelate: "square.grid.3x3.fill"
         }
     }
 
@@ -25,6 +29,7 @@ enum AnnotationTool: String, CaseIterable {
         case .arrow: "Draw an arrow"
         case .text: "Add a text label"
         case .rectangle: "Draw a rectangle"
+        case .pixelate: "Pixelate a region (permanent — redacts the image)"
         }
     }
 }
@@ -82,6 +87,15 @@ struct RectangleAnnotation: Identifiable, Equatable {
             rotation: rotation
         )
     }
+}
+
+/// Defaults shared by the destructive pixelate tool. Pixelation is applied
+/// directly to the bitmap (not stored as an annotation) so a redacted region
+/// can't be moved, deleted, or otherwise un-hidden by accident.
+enum PixelateDefaults {
+    /// Block size in points. Tuned to be aggressive enough that small text
+    /// (e.g. a 12pt token) is unrecoverable on a Retina display.
+    static let blockSize: CGFloat = 28
 }
 
 struct TextAnnotation: Identifiable, Equatable {
@@ -158,6 +172,92 @@ extension NSImage {
             )
             return true
         }
+    }
+
+    /// Returns a copy of this image with `CIPixellate` applied, producing
+    /// chunky square blocks of `blockSize` points. Preserves the bitmap's
+    /// pixel resolution so the result remains crisp on Retina. Returns nil
+    /// when the image has no rasterizable representation.
+    func pixelated(blockSize: CGFloat) -> NSImage? {
+        guard let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return nil
+        }
+        let pointSize = size
+        guard pointSize.width > 0, pointSize.height > 0 else { return nil }
+
+        let pixelsPerPoint = CGFloat(cgImage.width) / pointSize.width
+        let filter = CIFilter.pixellate()
+        let ciImage = CIImage(cgImage: cgImage)
+        filter.inputImage = ciImage
+        // CIPixellate's `scale` is in pixels — scale up to match Retina assets.
+        filter.scale = Float(max(1, blockSize * pixelsPerPoint))
+        // Anchor at the image's top-left corner so blocks start cleanly at
+        // the edge instead of being phase-shifted by the filter's default
+        // center anchor.
+        filter.center = CGPoint(x: 0, y: 0)
+
+        let context = CIContext(options: [.useSoftwareRenderer: false])
+        guard let output = filter.outputImage,
+              let rendered = context.createCGImage(output, from: ciImage.extent)
+        else {
+            return nil
+        }
+        return NSImage(cgImage: rendered, size: pointSize)
+    }
+
+    /// Returns a copy of this image with the given canvas-point rect replaced
+    /// by a pixelated version of the underlying pixels. The rest of the
+    /// bitmap is untouched. Used by the destructive pixelate tool — once
+    /// applied, only an explicit Undo can recover the original pixels.
+    func pixelating(rect: CGRect, blockSize: CGFloat) -> NSImage? {
+        guard let originalCG = cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let pixelatedNS = pixelated(blockSize: blockSize),
+              let pixelatedCG = pixelatedNS.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else {
+            return nil
+        }
+        let pointSize = size
+        guard pointSize.width > 0, pointSize.height > 0 else { return nil }
+
+        let pixelW = CGFloat(originalCG.width)
+        let pixelH = CGFloat(originalCG.height)
+        let sx = pixelW / pointSize.width
+        let sy = pixelH / pointSize.height
+
+        // Convert the canvas-point rect (top-left origin) into the CGContext's
+        // bottom-left-origin pixel space.
+        let pixelRect = CGRect(
+            x: rect.minX * sx,
+            y: pixelH - rect.maxY * sy,
+            width: rect.width * sx,
+            height: rect.height * sy
+        ).integral.intersection(CGRect(x: 0, y: 0, width: pixelW, height: pixelH))
+
+        guard pixelRect.width >= 1, pixelRect.height >= 1 else { return self }
+
+        guard let context = CGContext(
+            data: nil,
+            width: Int(pixelW),
+            height: Int(pixelH),
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        let fullPixelRect = CGRect(x: 0, y: 0, width: pixelW, height: pixelH)
+        context.draw(originalCG, in: fullPixelRect)
+
+        // Stamp the pre-pixelated full image, clipped to the target rect, on
+        // top of the original. Same source coordinate system for both, so
+        // pixels line up.
+        context.saveGState()
+        context.clip(to: pixelRect)
+        context.draw(pixelatedCG, in: fullPixelRect)
+        context.restoreGState()
+
+        guard let output = context.makeImage() else { return nil }
+        return NSImage(cgImage: output, size: pointSize)
     }
 
     /// Returns a new image rotated by 90° with swapped dimensions.

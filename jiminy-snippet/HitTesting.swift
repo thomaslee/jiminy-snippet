@@ -67,6 +67,11 @@ enum AnnotationHit {
         if case .body = zone { return true }
         return false
     }
+
+    var isRotateHandle: Bool {
+        if case .rotateHandle = zone { return true }
+        return false
+    }
 }
 
 /// Hit-tests a point against all annotations.

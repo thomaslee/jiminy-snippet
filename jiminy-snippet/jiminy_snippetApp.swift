@@ -24,6 +24,9 @@ struct jiminy_snippetApp: App {
         .defaultSize(width: 900, height: 700)
         .defaultLaunchBehavior(SettingsManager.shared.showCaptureWindowOnStartup ? .automatic : .suppressed)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                AboutMenuItem(aboutWindowID: Self.aboutWindowID)
+            }
             CommandGroup(replacing: .saveItem) {
                 SaveSceneMenuItem()
                 SaveAsSceneMenuItem()
@@ -48,15 +51,30 @@ struct jiminy_snippetApp: App {
             SettingsView()
         }
 
+        // Standalone About panel. Singleton by virtue of `Window`, so repeated
+        // "About Jiminy Snippet" clicks just bring it forward instead of
+        // stacking copies. Suppressed at launch so the menu-bar-first flow is
+        // unchanged.
+        Window("About Jiminy Snippet", id: Self.aboutWindowID) {
+            AboutView()
+        }
+        .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
+        .commandsRemoved()
+
         MenuBarExtra {
-            MenuBarCommands(mainWindowID: Self.mainWindowID)
-                .environment(screenshotManager)
+            MenuBarCommands(
+                mainWindowID: Self.mainWindowID,
+                aboutWindowID: Self.aboutWindowID
+            )
+            .environment(screenshotManager)
         } label: {
             Image(systemName: "camera")
         }
     }
 
     static let mainWindowID = "main"
+    static let aboutWindowID = "about"
 }
 
 /// Menu bar item content. Routes capture commands through
@@ -64,6 +82,7 @@ struct jiminy_snippetApp: App {
 /// and activates the app so the result is immediately visible.
 private struct MenuBarCommands: View {
     let mainWindowID: String
+    let aboutWindowID: String
 
     @Environment(ScreenshotManager.self) private var screenshotManager
     @Environment(\.openWindow) private var openWindow
@@ -93,6 +112,9 @@ private struct MenuBarCommands: View {
             showMainWindow()
         }
         Divider()
+        Button("About Jiminy Snippet") {
+            showAboutWindow(aboutWindowID: aboutWindowID, openWindow: openWindow)
+        }
         Button("Settings...") {
             openSettings()
         }
@@ -127,6 +149,35 @@ private struct MenuBarCommands: View {
         DispatchQueue.main.async {
             try? openSettingsAction()
         }
+    }
+}
+
+/// Menu item that replaces SwiftUI's default "About" panel with our own
+/// AboutView window. Lives inside `.commands` so it picks up the standard
+/// keyboard navigation and menu placement (top of the app menu).
+private struct AboutMenuItem: View {
+    let aboutWindowID: String
+
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("About Jiminy Snippet") {
+            showAboutWindow(aboutWindowID: aboutWindowID, openWindow: openWindow)
+        }
+    }
+}
+
+/// Brings the About window forward, activating the app first so it works
+/// from the menu bar (`.accessory` activation policy) where SwiftUI's plain
+/// `openWindow` would otherwise raise the window behind whatever's frontmost.
+@MainActor
+private func showAboutWindow(
+    aboutWindowID: String,
+    openWindow: OpenWindowAction
+) {
+    NSApp.activate(ignoringOtherApps: true)
+    DispatchQueue.main.async {
+        openWindow(id: aboutWindowID)
     }
 }
 
