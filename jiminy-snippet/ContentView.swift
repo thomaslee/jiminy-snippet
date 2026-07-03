@@ -16,9 +16,7 @@ struct ContentView: View {
     @State private var scale: CGFloat = 1.0
     @State private var canvasSize: CGSize = .zero
 
-    @State private var arrows: [ArrowAnnotation] = []
-    @State private var texts: [TextAnnotation] = []
-    @State private var rectangles: [RectangleAnnotation] = []
+    @State private var annotations: [Annotation] = []
     @State private var rectangleFillStyle: RectangleFillStyle = .outlined
     @State private var selectedAnnotationIds: Set<UUID> = []
     @State private var cropMode: Bool = false
@@ -44,9 +42,7 @@ struct ContentView: View {
     var body: some View {
         mainContent
             .frame(minWidth: 800, minHeight: 600)
-            .onChange(of: arrows) { markUnsaved() }
-            .onChange(of: texts) { markUnsaved() }
-            .onChange(of: rectangles) { markUnsaved() }
+            .onChange(of: annotations) { markUnsaved() }
             .onChange(of: screenshotManager.capturedImage) { oldImage, newImage in
                 markUnsaved()
                 // Re-fit only when the image dimensions actually change
@@ -110,9 +106,7 @@ struct ContentView: View {
                 AnnotationCanvas(
                     image: image,
                     pixelatedImage: pixelatedImage,
-                    arrows: $arrows,
-                    texts: $texts,
-                    rectangles: $rectangles,
+                    annotations: $annotations,
                     selectedTool: $selectedTool,
                     selectedAnnotationIds: $selectedAnnotationIds,
                     selectedColor: selectedColor,
@@ -416,20 +410,12 @@ struct ContentView: View {
         guard !selectedAnnotationIds.isEmpty else { return }
 
         let ids = selectedAnnotationIds
-        let needsChange = arrows.contains(where: { ids.contains($0.id) && $0.color != color })
-            || texts.contains(where: { ids.contains($0.id) && $0.color != color })
-            || rectangles.contains(where: { ids.contains($0.id) && $0.color != color })
+        let needsChange = annotations.contains { ids.contains($0.id) && $0.color != color }
         guard needsChange else { return }
 
         recordSnapshot()
-        for i in arrows.indices where ids.contains(arrows[i].id) {
-            arrows[i].color = color
-        }
-        for i in texts.indices where ids.contains(texts[i].id) {
-            texts[i].color = color
-        }
-        for i in rectangles.indices where ids.contains(rectangles[i].id) {
-            rectangles[i].color = color
+        for i in annotations.indices where ids.contains(annotations[i].id) {
+            annotations[i].color = color
         }
     }
 
@@ -439,7 +425,9 @@ struct ContentView: View {
     /// place).
     private var isRectangleContextActive: Bool {
         if selectedTool == .rectangle { return true }
-        return rectangles.contains(where: { selectedAnnotationIds.contains($0.id) })
+        return annotations.contains {
+            selectedAnnotationIds.contains($0.id) && $0.rectangle != nil
+        }
     }
 
     private var rectangleStyleControls: some View {
@@ -469,11 +457,13 @@ struct ContentView: View {
     private func setRectangleFillStyle(_ style: RectangleFillStyle) {
         rectangleFillStyle = style
         let ids = selectedAnnotationIds
-        let needsChange = rectangles.contains(where: { ids.contains($0.id) && $0.style != style })
+        let needsChange = annotations.contains {
+            ids.contains($0.id) && $0.rectangle.map { $0.style != style } == true
+        }
         guard needsChange else { return }
         recordSnapshot()
-        for i in rectangles.indices where ids.contains(rectangles[i].id) {
-            rectangles[i].style = style
+        for id in ids {
+            annotations.updateRectangle(id: id) { $0.style = style }
         }
     }
 
@@ -527,29 +517,7 @@ struct ContentView: View {
 
         let sx = newSize.width / oldSize.width
         let sy = newSize.height / oldSize.height
-
-        for i in arrows.indices {
-            arrows[i].start.x *= sx
-            arrows[i].start.y *= sy
-            arrows[i].end.x *= sx
-            arrows[i].end.y *= sy
-            arrows[i].lineWidth *= min(sx, sy)
-        }
-        for i in texts.indices {
-            texts[i].position.x *= sx
-            texts[i].position.y *= sy
-            texts[i].fontSize *= min(sx, sy)
-        }
-        for i in rectangles.indices {
-            let r = rectangles[i].rect
-            rectangles[i].rect = CGRect(
-                x: r.origin.x * sx,
-                y: r.origin.y * sy,
-                width: r.width * sx,
-                height: r.height * sy
-            )
-            rectangles[i].lineWidth *= min(sx, sy)
-        }
+        annotations = annotations.map { $0.scaled(sx: sx, sy: sy) }
 
         selectedAnnotationIds.removeAll()
         screenshotManager.capturedImage = resized
@@ -616,29 +584,20 @@ struct ContentView: View {
     /// "current" color to surface, so we leave the toolbar alone.
     private func syncPaletteToSelection() {
         guard selectedAnnotationIds.count == 1,
-              let id = selectedAnnotationIds.first
+              let id = selectedAnnotationIds.first,
+              let annotation = annotations.first(where: { $0.id == id })
         else { return }
-        let color: Color
-        if let arrow = arrows.first(where: { $0.id == id }) {
-            color = arrow.color
-        } else if let text = texts.first(where: { $0.id == id }) {
-            color = text.color
-        } else if let rectangle = rectangles.first(where: { $0.id == id }) {
-            color = rectangle.color
+        if let rectangle = annotation.rectangle {
             // Sync the style toggle so the toolbar reflects the selection.
             rectangleFillStyle = rectangle.style
-        } else {
-            return
         }
-        if let index = AnnotationPalette.colors.firstIndex(where: { $0.color == color }) {
+        if let index = AnnotationPalette.colors.firstIndex(where: { $0.color == annotation.color }) {
             selectedColorIndex = index
         }
     }
 
     private func clearAnnotations() {
-        arrows.removeAll()
-        texts.removeAll()
-        rectangles.removeAll()
+        annotations.removeAll()
         undoHistory.clear()
     }
 
@@ -678,9 +637,7 @@ struct ContentView: View {
     /// rotate, and color changes.
     private func recordSnapshot() {
         guard let image = screenshotManager.capturedImage else { return }
-        undoHistory.push(
-            EditSnapshot(image: image, arrows: arrows, texts: texts, rectangles: rectangles)
-        )
+        undoHistory.push(EditSnapshot(image: image, annotations: annotations))
     }
 
     /// Drops the most recently pushed snapshot. Used when an in-flight edit is
@@ -698,29 +655,15 @@ struct ContentView: View {
         let ids = selectedAnnotationIds
         let offset = CGSize(width: 20, height: 20)
 
-        let arrowsToDup = arrows.filter { ids.contains($0.id) }
-        let textsToDup = texts.filter { ids.contains($0.id) }
-        let rectanglesToDup = rectangles.filter { ids.contains($0.id) }
-        guard !arrowsToDup.isEmpty || !textsToDup.isEmpty || !rectanglesToDup.isEmpty else {
-            return
-        }
+        let toDuplicate = annotations.filter { ids.contains($0.id) }
+        guard !toDuplicate.isEmpty else { return }
 
         recordSnapshot()
 
         var newSelection: Set<UUID> = []
-        for arrow in arrowsToDup {
-            let copy = arrow.duplicated(offset: offset)
-            arrows.append(copy)
-            newSelection.insert(copy.id)
-        }
-        for text in textsToDup {
-            let copy = text.duplicated(offset: offset)
-            texts.append(copy)
-            newSelection.insert(copy.id)
-        }
-        for rectangle in rectanglesToDup {
-            let copy = rectangle.duplicated(offset: offset)
-            rectangles.append(copy)
+        for annotation in toDuplicate {
+            let copy = annotation.duplicated(offset: offset)
+            annotations.append(copy)
             newSelection.insert(copy.id)
         }
         selectedAnnotationIds = newSelection
@@ -745,18 +688,14 @@ struct ContentView: View {
     /// loaded — in which case there's nothing to undo anyway.
     private func currentEditSnapshot() -> EditSnapshot? {
         guard let image = screenshotManager.capturedImage else { return nil }
-        return EditSnapshot(
-            image: image, arrows: arrows, texts: texts, rectangles: rectangles
-        )
+        return EditSnapshot(image: image, annotations: annotations)
     }
 
     /// Restores a snapshot produced by undo or redo. Clears selection and
     /// exits crop mode because both become meaningless against the restored
     /// state.
     private func apply(snapshot: EditSnapshot) {
-        arrows = snapshot.arrows
-        texts = snapshot.texts
-        rectangles = snapshot.rectangles
+        annotations = snapshot.annotations
         if screenshotManager.capturedImage !== snapshot.image {
             screenshotManager.capturedImage = snapshot.image
         }
@@ -781,12 +720,7 @@ struct ContentView: View {
     private func copyToClipboard() {
         guard let image = screenshotManager.capturedImage else { return }
 
-        let rendered = ImageExporter.render(
-            image: image,
-            arrows: arrows,
-            texts: texts,
-            rectangles: rectangles
-        )
+        let rendered = ImageExporter.render(image: image, annotations: annotations)
 
         ImageExporter.copyToPasteboard(image: rendered)
         showToast(.copied)
@@ -815,12 +749,7 @@ struct ContentView: View {
     private func writeCurrentImage(to url: URL) {
         guard let image = screenshotManager.capturedImage else { return }
 
-        let rendered = ImageExporter.render(
-            image: image,
-            arrows: arrows,
-            texts: texts,
-            rectangles: rectangles
-        )
+        let rendered = ImageExporter.render(image: image, annotations: annotations)
 
         do {
             try ImageExporter.save(image: rendered, to: url)
@@ -908,21 +837,8 @@ struct ContentView: View {
 
         recordSnapshot()
 
-        let dx = -rect.origin.x
-        let dy = -rect.origin.y
-        for i in arrows.indices {
-            arrows[i].start.x += dx
-            arrows[i].start.y += dy
-            arrows[i].end.x += dx
-            arrows[i].end.y += dy
-        }
-        for i in texts.indices {
-            texts[i].position.x += dx
-            texts[i].position.y += dy
-        }
-        for i in rectangles.indices {
-            rectangles[i].rect = rectangles[i].rect.offsetBy(dx: dx, dy: dy)
-        }
+        let offset = CGSize(width: -rect.origin.x, height: -rect.origin.y)
+        annotations = annotations.map { $0.translated(by: offset) }
 
         selectedAnnotationIds.removeAll()
         screenshotManager.capturedImage = cropped
@@ -939,41 +855,11 @@ struct ContentView: View {
 
         screenshotManager.capturedImage = image.rotated(clockwise: clockwise)
 
-        for i in arrows.indices {
-            arrows[i].start = rotatePoint(arrows[i].start, imageWidth: w, imageHeight: h, clockwise: clockwise)
-            arrows[i].end = rotatePoint(arrows[i].end, imageWidth: w, imageHeight: h, clockwise: clockwise)
-        }
-        for i in texts.indices {
-            texts[i].position = rotatePoint(texts[i].position, imageWidth: w, imageHeight: h, clockwise: clockwise)
-            texts[i].rotation += clockwise ? 90 : -90
-        }
-        for i in rectangles.indices {
-            let standardized = rectangles[i].rect.standardized
-            let p1 = rotatePoint(
-                CGPoint(x: standardized.minX, y: standardized.minY),
-                imageWidth: w, imageHeight: h, clockwise: clockwise
-            )
-            let p2 = rotatePoint(
-                CGPoint(x: standardized.maxX, y: standardized.maxY),
-                imageWidth: w, imageHeight: h, clockwise: clockwise
-            )
-            rectangles[i].rect = CGRect(
-                x: min(p1.x, p2.x),
-                y: min(p1.y, p2.y),
-                width: abs(p2.x - p1.x),
-                height: abs(p2.y - p1.y)
-            )
+        annotations = annotations.map {
+            $0.rotated90(clockwise: clockwise, imageWidth: w, imageHeight: h)
         }
         selectedAnnotationIds.removeAll()
         // zoomToFit() and markUnsaved() are handled by onChange observers
-    }
-
-    private func rotatePoint(_ point: CGPoint, imageWidth w: CGFloat, imageHeight h: CGFloat, clockwise: Bool) -> CGPoint {
-        if clockwise {
-            return CGPoint(x: h - point.y, y: point.x)
-        } else {
-            return CGPoint(x: point.y, y: w - point.x)
-        }
     }
 
     private func markUnsaved() {

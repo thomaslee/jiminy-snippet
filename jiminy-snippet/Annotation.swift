@@ -123,6 +123,186 @@ struct TextAnnotation: Identifiable, Equatable {
     }
 }
 
+/// A single canvas annotation, unifying the concrete kinds so the editor can
+/// store one ordered array. Array order is z-order: the first element draws
+/// at the bottom, the last draws on top, and hit testing walks the array in
+/// reverse so the topmost annotation wins regardless of kind.
+enum Annotation: Identifiable, Equatable {
+    case arrow(ArrowAnnotation)
+    case text(TextAnnotation)
+    case rectangle(RectangleAnnotation)
+
+    var id: UUID {
+        switch self {
+        case .arrow(let arrow): arrow.id
+        case .text(let text): text.id
+        case .rectangle(let rectangle): rectangle.id
+        }
+    }
+
+    var arrow: ArrowAnnotation? {
+        if case .arrow(let arrow) = self { arrow } else { nil }
+    }
+
+    var text: TextAnnotation? {
+        if case .text(let text) = self { text } else { nil }
+    }
+
+    var rectangle: RectangleAnnotation? {
+        if case .rectangle(let rectangle) = self { rectangle } else { nil }
+    }
+
+    var color: Color {
+        get {
+            switch self {
+            case .arrow(let arrow): arrow.color
+            case .text(let text): text.color
+            case .rectangle(let rectangle): rectangle.color
+            }
+        }
+        set {
+            switch self {
+            case .arrow(var arrow):
+                arrow.color = newValue
+                self = .arrow(arrow)
+            case .text(var text):
+                text.color = newValue
+                self = .text(text)
+            case .rectangle(var rectangle):
+                rectangle.color = newValue
+                self = .rectangle(rectangle)
+            }
+        }
+    }
+
+    /// Returns a copy with a fresh id, shifted by `offset` so the duplicate
+    /// is visually distinguishable from the original.
+    func duplicated(offset: CGSize) -> Annotation {
+        switch self {
+        case .arrow(let arrow): .arrow(arrow.duplicated(offset: offset))
+        case .text(let text): .text(text.duplicated(offset: offset))
+        case .rectangle(let rectangle): .rectangle(rectangle.duplicated(offset: offset))
+        }
+    }
+
+    /// Returns a copy (same id) translated by `offset`.
+    func translated(by offset: CGSize) -> Annotation {
+        switch self {
+        case .arrow(var arrow):
+            arrow.start.x += offset.width
+            arrow.start.y += offset.height
+            arrow.end.x += offset.width
+            arrow.end.y += offset.height
+            return .arrow(arrow)
+        case .text(var text):
+            text.position.x += offset.width
+            text.position.y += offset.height
+            return .text(text)
+        case .rectangle(var rectangle):
+            rectangle.rect = rectangle.rect.offsetBy(dx: offset.width, dy: offset.height)
+            return .rectangle(rectangle)
+        }
+    }
+
+    /// Returns a copy with all geometry scaled by (sx, sy) — used when the
+    /// underlying image is resized. Stroke widths and font size scale by the
+    /// smaller factor so annotations stay proportionate without distorting.
+    func scaled(sx: CGFloat, sy: CGFloat) -> Annotation {
+        let uniform = min(sx, sy)
+        switch self {
+        case .arrow(var arrow):
+            arrow.start.x *= sx
+            arrow.start.y *= sy
+            arrow.end.x *= sx
+            arrow.end.y *= sy
+            arrow.lineWidth *= uniform
+            return .arrow(arrow)
+        case .text(var text):
+            text.position.x *= sx
+            text.position.y *= sy
+            text.fontSize *= uniform
+            return .text(text)
+        case .rectangle(var rectangle):
+            let r = rectangle.rect
+            rectangle.rect = CGRect(
+                x: r.origin.x * sx,
+                y: r.origin.y * sy,
+                width: r.width * sx,
+                height: r.height * sy
+            )
+            rectangle.lineWidth *= uniform
+            return .rectangle(rectangle)
+        }
+    }
+
+    /// Returns a copy repositioned for a 90° rotation of an image that was
+    /// `imageWidth` × `imageHeight` points before the rotation.
+    func rotated90(clockwise: Bool, imageWidth w: CGFloat, imageHeight h: CGFloat) -> Annotation {
+        func rotate(_ point: CGPoint) -> CGPoint {
+            clockwise
+                ? CGPoint(x: h - point.y, y: point.x)
+                : CGPoint(x: point.y, y: w - point.x)
+        }
+        switch self {
+        case .arrow(var arrow):
+            arrow.start = rotate(arrow.start)
+            arrow.end = rotate(arrow.end)
+            return .arrow(arrow)
+        case .text(var text):
+            text.position = rotate(text.position)
+            text.rotation += clockwise ? 90 : -90
+            return .text(text)
+        case .rectangle(var rectangle):
+            let bounds = rectangle.rect.standardized
+            let p1 = rotate(CGPoint(x: bounds.minX, y: bounds.minY))
+            let p2 = rotate(CGPoint(x: bounds.maxX, y: bounds.maxY))
+            rectangle.rect = CGRect(
+                x: min(p1.x, p2.x),
+                y: min(p1.y, p2.y),
+                width: abs(p2.x - p1.x),
+                height: abs(p2.y - p1.y)
+            )
+            return .rectangle(rectangle)
+        }
+    }
+}
+
+extension Array where Element == Annotation {
+    /// Locates the annotation with the given id and applies an in-place
+    /// mutation. Does nothing if no matching annotation exists.
+    mutating func update(id: UUID, _ body: (inout Annotation) -> Void) {
+        guard let i = firstIndex(where: { $0.id == id }) else { return }
+        body(&self[i])
+    }
+
+    /// Typed variant — a no-op when the id doesn't belong to an arrow.
+    mutating func updateArrow(id: UUID, _ body: (inout ArrowAnnotation) -> Void) {
+        update(id: id) {
+            guard case .arrow(var arrow) = $0 else { return }
+            body(&arrow)
+            $0 = .arrow(arrow)
+        }
+    }
+
+    /// Typed variant — a no-op when the id doesn't belong to a text annotation.
+    mutating func updateText(id: UUID, _ body: (inout TextAnnotation) -> Void) {
+        update(id: id) {
+            guard case .text(var text) = $0 else { return }
+            body(&text)
+            $0 = .text(text)
+        }
+    }
+
+    /// Typed variant — a no-op when the id doesn't belong to a rectangle.
+    mutating func updateRectangle(id: UUID, _ body: (inout RectangleAnnotation) -> Void) {
+        update(id: id) {
+            guard case .rectangle(var rectangle) = $0 else { return }
+            body(&rectangle)
+            $0 = .rectangle(rectangle)
+        }
+    }
+}
+
 extension NSImage {
     /// Returns a new image cropped to `rect` (expressed in the image's point space).
     /// Preserves the full pixel resolution of the source bitmap.

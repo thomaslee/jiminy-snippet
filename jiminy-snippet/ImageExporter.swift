@@ -23,9 +23,7 @@ struct ImageExporter {
 
     static func render(
         image: NSImage,
-        arrows: [ArrowAnnotation],
-        texts: [TextAnnotation],
-        rectangles: [RectangleAnnotation]
+        annotations: [Annotation]
     ) -> NSImage {
         let pointSize = image.size
         let pixelSize = pixelSize(of: image) ?? pointSize
@@ -60,9 +58,7 @@ struct ImageExporter {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = nsContext
 
-        drawArrows(arrows, in: context)
-        drawRectangles(rectangles, in: context)
-        drawTexts(texts, in: context)
+        drawAnnotations(annotations, in: context)
 
         NSGraphicsContext.restoreGraphicsState()
 
@@ -108,123 +104,129 @@ struct ImageExporter {
 
     // MARK: - Private
 
-    private static func drawArrows(_ arrows: [ArrowAnnotation], in context: CGContext) {
-        for arrow in arrows {
-            let cgPath = AnnotationRenderer.arrowPath(
-                start: arrow.start, end: arrow.end, lineWidth: arrow.lineWidth
-            ).cgPath
-            let outlineColor = NSColor(AnnotationRenderer.arrowOutlineColor(for: arrow.color)).cgColor
-            let outlineWidth = AnnotationRenderer.arrowOutlineWidth(for: arrow.lineWidth)
+    /// Draws annotations in array order, matching the canvas's z-order.
+    private static func drawAnnotations(_ annotations: [Annotation], in context: CGContext) {
+        for annotation in annotations {
+            switch annotation {
+            case .arrow(let arrow): draw(arrow, in: context)
+            case .rectangle(let rectangle): draw(rectangle, in: context)
+            case .text(let text): draw(text, in: context)
+            }
+        }
+    }
 
-            context.saveGState()
-            context.addPath(cgPath)
-            context.setFillColor(NSColor(arrow.color).cgColor)
-            context.fillPath()
+    private static func draw(_ arrow: ArrowAnnotation, in context: CGContext) {
+        let cgPath = AnnotationRenderer.arrowPath(
+            start: arrow.start, end: arrow.end, lineWidth: arrow.lineWidth
+        ).cgPath
+        let outlineColor = NSColor(AnnotationRenderer.arrowOutlineColor(for: arrow.color)).cgColor
+        let outlineWidth = AnnotationRenderer.arrowOutlineWidth(for: arrow.lineWidth)
 
-            context.addPath(cgPath)
+        context.saveGState()
+        context.addPath(cgPath)
+        context.setFillColor(NSColor(arrow.color).cgColor)
+        context.fillPath()
+
+        context.addPath(cgPath)
+        context.setStrokeColor(outlineColor)
+        context.setLineWidth(outlineWidth)
+        context.setLineJoin(.miter)
+        context.setMiterLimit(6)
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    private static func draw(_ rectangle: RectangleAnnotation, in context: CGContext) {
+        let bounds = rectangle.rect.standardized
+        guard bounds.width > 0, bounds.height > 0 else { return }
+
+        let fillColor = NSColor(rectangle.color).cgColor
+        let outlineColor = NSColor(
+            AnnotationRenderer.arrowOutlineColor(for: rectangle.color)
+        ).cgColor
+        let outlineWidth = AnnotationRenderer.arrowOutlineWidth(for: rectangle.lineWidth)
+        let w = bounds.width
+        let h = bounds.height
+        // Rotate around the rect's visual center to match on-screen rendering.
+        let localRect = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+
+        context.saveGState()
+        context.translateBy(x: bounds.midX, y: bounds.midY)
+        context.rotate(by: rectangle.rotation * .pi / 180)
+        context.setLineJoin(.miter)
+
+        switch rectangle.style {
+        case .filled:
+            context.setFillColor(fillColor)
+            context.fill(localRect)
             context.setStrokeColor(outlineColor)
             context.setLineWidth(outlineWidth)
-            context.setLineJoin(.miter)
-            context.setMiterLimit(6)
-            context.strokePath()
-            context.restoreGState()
+            context.stroke(localRect)
+        case .outlined:
+            let strokeW = rectangle.lineWidth * 2.5
+            context.setStrokeColor(outlineColor)
+            context.setLineWidth(strokeW + outlineWidth * 2)
+            context.stroke(localRect)
+            context.setStrokeColor(fillColor)
+            context.setLineWidth(strokeW)
+            context.stroke(localRect)
         }
+
+        context.restoreGState()
     }
 
-    private static func drawRectangles(_ rectangles: [RectangleAnnotation], in context: CGContext) {
-        for rectangle in rectangles {
-            let bounds = rectangle.rect.standardized
-            guard bounds.width > 0, bounds.height > 0 else { continue }
+    private static func draw(_ annotation: TextAnnotation, in context: CGContext) {
+        guard !annotation.text.isEmpty else { return }
+        let font = RenderConstants.textFont(size: annotation.fontSize)
 
-            let fillColor = NSColor(rectangle.color).cgColor
-            let outlineColor = NSColor(
-                AnnotationRenderer.arrowOutlineColor(for: rectangle.color)
-            ).cgColor
-            let outlineWidth = AnnotationRenderer.arrowOutlineWidth(for: rectangle.lineWidth)
-            let w = bounds.width
-            let h = bounds.height
-            // Rotate around the rect's visual center to match on-screen rendering.
-            let localRect = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+        // Resolve SwiftUI Colors to concrete sRGB NSColors up-front. The
+        // export CGContext has no NSAppearance, so dynamic colors bridged
+        // from SwiftUI can otherwise resolve unpredictably.
+        let foregroundColor = NSColor(annotation.color).usingColorSpace(.sRGB)
+            ?? NSColor(annotation.color)
+        let outlineColor = NSColor(
+            AnnotationRenderer.arrowOutlineColor(for: annotation.color)
+        ).usingColorSpace(.sRGB) ?? .black
 
-            context.saveGState()
-            context.translateBy(x: bounds.midX, y: bounds.midY)
-            context.rotate(by: rectangle.rotation * .pi / 180)
-            context.setLineJoin(.miter)
+        let fillString = NSAttributedString(
+            string: annotation.text,
+            attributes: [.font: font, .foregroundColor: foregroundColor]
+        )
+        let outlineString = NSAttributedString(
+            string: annotation.text,
+            attributes: [.font: font, .foregroundColor: outlineColor]
+        )
 
-            switch rectangle.style {
-            case .filled:
-                context.setFillColor(fillColor)
-                context.fill(localRect)
-                context.setStrokeColor(outlineColor)
-                context.setLineWidth(outlineWidth)
-                context.stroke(localRect)
-            case .outlined:
-                let strokeW = rectangle.lineWidth * 2.5
-                context.setStrokeColor(outlineColor)
-                context.setLineWidth(strokeW + outlineWidth * 2)
-                context.stroke(localRect)
-                context.setStrokeColor(fillColor)
-                context.setLineWidth(strokeW)
-                context.stroke(localRect)
-            }
+        // Match the on-screen renderer: stamp the outline-colored text at
+        // eight points on a circle around the origin to fake a border,
+        // then draw the real fill on top. Using `.strokeWidth` on the
+        // attributed string looks correct on screen but produces a black
+        // glyph in this headless CGContext.
+        let radius = AnnotationRenderer.textOutlineRadius(for: annotation.fontSize)
+        let diag = radius * 0.7071
+        let offsets: [(CGFloat, CGFloat)] = [
+            ( radius,      0),
+            ( diag,     diag),
+            (     0,  radius),
+            (-diag,     diag),
+            (-radius,      0),
+            (-diag,    -diag),
+            (     0, -radius),
+            ( diag,    -diag),
+        ]
 
-            context.restoreGState()
+        context.saveGState()
+        context.translateBy(x: annotation.position.x, y: annotation.position.y)
+        context.rotate(by: annotation.rotation * .pi / 180)
+        context.scaleBy(x: annotation.scaleX, y: annotation.scaleY)
+        let origin = CGPoint(
+            x: RenderConstants.textPaddingH,
+            y: RenderConstants.textPaddingV
+        )
+        for (dx, dy) in offsets {
+            outlineString.draw(at: CGPoint(x: origin.x + dx, y: origin.y + dy))
         }
-    }
-
-    private static func drawTexts(_ texts: [TextAnnotation], in context: CGContext) {
-        for annotation in texts where !annotation.text.isEmpty {
-            let font = RenderConstants.textFont(size: annotation.fontSize)
-
-            // Resolve SwiftUI Colors to concrete sRGB NSColors up-front. The
-            // export CGContext has no NSAppearance, so dynamic colors bridged
-            // from SwiftUI can otherwise resolve unpredictably.
-            let foregroundColor = NSColor(annotation.color).usingColorSpace(.sRGB)
-                ?? NSColor(annotation.color)
-            let outlineColor = NSColor(
-                AnnotationRenderer.arrowOutlineColor(for: annotation.color)
-            ).usingColorSpace(.sRGB) ?? .black
-
-            let fillString = NSAttributedString(
-                string: annotation.text,
-                attributes: [.font: font, .foregroundColor: foregroundColor]
-            )
-            let outlineString = NSAttributedString(
-                string: annotation.text,
-                attributes: [.font: font, .foregroundColor: outlineColor]
-            )
-
-            // Match the on-screen renderer: stamp the outline-colored text at
-            // eight points on a circle around the origin to fake a border,
-            // then draw the real fill on top. Using `.strokeWidth` on the
-            // attributed string looks correct on screen but produces a black
-            // glyph in this headless CGContext.
-            let radius = AnnotationRenderer.textOutlineRadius(for: annotation.fontSize)
-            let diag = radius * 0.7071
-            let offsets: [(CGFloat, CGFloat)] = [
-                ( radius,      0),
-                ( diag,     diag),
-                (     0,  radius),
-                (-diag,     diag),
-                (-radius,      0),
-                (-diag,    -diag),
-                (     0, -radius),
-                ( diag,    -diag),
-            ]
-
-            context.saveGState()
-            context.translateBy(x: annotation.position.x, y: annotation.position.y)
-            context.rotate(by: annotation.rotation * .pi / 180)
-            context.scaleBy(x: annotation.scaleX, y: annotation.scaleY)
-            let origin = CGPoint(
-                x: RenderConstants.textPaddingH,
-                y: RenderConstants.textPaddingV
-            )
-            for (dx, dy) in offsets {
-                outlineString.draw(at: CGPoint(x: origin.x + dx, y: origin.y + dy))
-            }
-            fillString.draw(at: origin)
-            context.restoreGState()
-        }
+        fillString.draw(at: origin)
+        context.restoreGState()
     }
 }

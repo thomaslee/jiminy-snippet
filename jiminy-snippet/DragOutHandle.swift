@@ -16,9 +16,7 @@ import UniformTypeIdentifiers
 /// they begin the drag.
 struct DragOutSource {
     let image: NSImage
-    let arrows: [ArrowAnnotation]
-    let texts: [TextAnnotation]
-    let rectangles: [RectangleAnnotation]
+    let annotations: [Annotation]
     let suggestedFilename: String
 
     /// Returns nil when the canvas isn't ready to be dragged out (no image,
@@ -117,9 +115,7 @@ final class DragOutNSView: NSView, NSDraggingSource, NSFilePromiseProviderDelega
     private func startDrag(with event: NSEvent, source: DragOutSource) {
         let rendered = ImageExporter.render(
             image: source.image,
-            arrows: source.arrows,
-            texts: source.texts,
-            rectangles: source.rectangles
+            annotations: source.annotations
         )
         guard let pngData = pngData(from: rendered) else { return }
 

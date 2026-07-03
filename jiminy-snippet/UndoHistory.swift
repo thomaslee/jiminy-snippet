@@ -11,9 +11,7 @@ import AppKit
 /// Captured before each discrete edit so that the operation can later be undone.
 struct EditSnapshot {
     let image: NSImage
-    let arrows: [ArrowAnnotation]
-    let texts: [TextAnnotation]
-    let rectangles: [RectangleAnnotation]
+    let annotations: [Annotation]
 }
 
 /// Fixed-capacity undo/redo history. Oldest undo snapshots are dropped once

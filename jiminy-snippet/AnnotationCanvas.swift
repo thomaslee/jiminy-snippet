@@ -14,9 +14,7 @@ struct AnnotationCanvas: View {
     /// because the cache may be momentarily out of date right after the
     /// underlying image changes.
     let pixelatedImage: NSImage?
-    @Binding var arrows: [ArrowAnnotation]
-    @Binding var texts: [TextAnnotation]
-    @Binding var rectangles: [RectangleAnnotation]
+    @Binding var annotations: [Annotation]
     @Binding var selectedTool: AnnotationTool?
     @Binding var selectedAnnotationIds: Set<UUID>
     let selectedColor: Color
@@ -68,8 +66,10 @@ struct AnnotationCanvas: View {
 
     private var textSizes: [UUID: CGSize] {
         var sizes: [UUID: CGSize] = [:]
-        for annotation in texts {
-            sizes[annotation.id] = AnnotationRenderer.measureText(annotation)
+        for annotation in annotations {
+            if let text = annotation.text {
+                sizes[text.id] = AnnotationRenderer.measureText(text)
+            }
         }
         return sizes
     }
@@ -83,7 +83,7 @@ struct AnnotationCanvas: View {
 
     private func hitTest(at point: CGPoint) -> AnnotationHit? {
         hitTestAnnotations(
-            at: point, arrows: arrows, texts: texts, rectangles: rectangles,
+            at: point, annotations: annotations,
             selectedId: singleSelectedId, textSizes: textSizes
         )
     }
@@ -97,7 +97,7 @@ struct AnnotationCanvas: View {
                     dragOutLayer
 
                     if let editingId = editing?.id,
-                       let annotation = texts.first(where: { $0.id == editingId }) {
+                       let annotation = annotations.first(where: { $0.id == editingId })?.text {
                         editingOverlay(for: annotation, id: editingId)
                     }
                 }
@@ -175,14 +175,9 @@ struct AnnotationCanvas: View {
 
     private func deleteSelectedAnnotations() {
         let ids = selectedAnnotationIds
-        let hasAny = arrows.contains(where: { ids.contains($0.id) })
-            || texts.contains(where: { ids.contains($0.id) })
-            || rectangles.contains(where: { ids.contains($0.id) })
-        guard hasAny else { return }
+        guard annotations.contains(where: { ids.contains($0.id) }) else { return }
         onBeginEdit()
-        arrows.removeAll { ids.contains($0.id) }
-        texts.removeAll { ids.contains($0.id) }
-        rectangles.removeAll { ids.contains($0.id) }
+        annotations.removeAll { ids.contains($0.id) }
         selectedAnnotationIds.removeAll()
     }
 
@@ -200,36 +195,37 @@ struct AnnotationCanvas: View {
             // around each member but suppresses manipulation handles.
             let isSingleSelection = selectedAnnotationIds.count == 1
 
-            for arrow in arrows {
-                let selected = selectedAnnotationIds.contains(arrow.id)
-                AnnotationRenderer.drawArrow(
-                    arrow,
-                    selected: selected,
-                    showHandles: selected && isSingleSelection,
-                    in: &context
-                )
-            }
-
-            for rectangle in rectangles {
-                let selected = selectedAnnotationIds.contains(rectangle.id)
-                AnnotationRenderer.drawRectangle(
-                    rectangle,
-                    selected: selected,
-                    showHandles: selected && isSingleSelection,
-                    in: &context
-                )
-            }
-
-            for annotation in texts where annotation.id != editing?.id {
-                let (resolved, size) = AnnotationRenderer.resolveText(annotation, in: context)
-                AnnotationRenderer.drawText(annotation, resolved: resolved, size: size, in: &context)
-                if selectedAnnotationIds.contains(annotation.id) {
-                    AnnotationRenderer.drawTextSelection(
-                        annotation,
-                        size: size,
-                        showHandles: isSingleSelection,
+            // Array order is z-order: earlier annotations draw underneath
+            // later ones, matching the reverse-order hit testing.
+            for annotation in annotations {
+                let selected = selectedAnnotationIds.contains(annotation.id)
+                switch annotation {
+                case .arrow(let arrow):
+                    AnnotationRenderer.drawArrow(
+                        arrow,
+                        selected: selected,
+                        showHandles: selected && isSingleSelection,
                         in: &context
                     )
+                case .rectangle(let rectangle):
+                    AnnotationRenderer.drawRectangle(
+                        rectangle,
+                        selected: selected,
+                        showHandles: selected && isSingleSelection,
+                        in: &context
+                    )
+                case .text(let text):
+                    guard text.id != editing?.id else { break }
+                    let (resolved, size) = AnnotationRenderer.resolveText(text, in: context)
+                    AnnotationRenderer.drawText(text, resolved: resolved, size: size, in: &context)
+                    if selected {
+                        AnnotationRenderer.drawTextSelection(
+                            text,
+                            size: size,
+                            showHandles: isSingleSelection,
+                            in: &context
+                        )
+                    }
                 }
             }
 
@@ -313,14 +309,16 @@ struct AnnotationCanvas: View {
     /// merely grazes the edge of an annotation is enough to select it.
     private func annotationsIntersecting(_ rect: CGRect) -> Set<UUID> {
         var ids: Set<UUID> = []
-        for arrow in arrows where arrowBoundingBox(arrow).intersects(rect) {
-            ids.insert(arrow.id)
-        }
-        for rectangle in rectangles where rectangleBoundingBox(rectangle).intersects(rect) {
-            ids.insert(rectangle.id)
-        }
-        for text in texts where textBoundingBox(text).intersects(rect) {
-            ids.insert(text.id)
+        for annotation in annotations {
+            let box: CGRect
+            switch annotation {
+            case .arrow(let arrow): box = arrowBoundingBox(arrow)
+            case .rectangle(let rectangle): box = rectangleBoundingBox(rectangle)
+            case .text(let text): box = textBoundingBox(text)
+            }
+            if box.intersects(rect) {
+                ids.insert(annotation.id)
+            }
         }
         return ids
     }
@@ -487,9 +485,7 @@ struct AnnotationCanvas: View {
     private func dragOutSource() -> DragOutSource? {
         DragOutSource(
             image: image,
-            arrows: arrows,
-            texts: texts,
-            rectangles: rectangles,
+            annotations: annotations,
             suggestedFilename: dragOutFilename ?? "screenshot.png"
         )
     }
@@ -524,9 +520,9 @@ struct AnnotationCanvas: View {
     private func textFieldOverlay(for annotation: TextAnnotation) -> some View {
         let annotationId = annotation.id
         let textBinding = Binding<String>(
-            get: { texts.first(where: { $0.id == annotationId })?.text ?? "" },
+            get: { annotations.first(where: { $0.id == annotationId })?.text?.text ?? "" },
             set: { newValue in
-                texts.update(id: annotationId) { $0.text = newValue }
+                annotations.updateText(id: annotationId) { $0.text = newValue }
             }
         )
         return TextField("", text: textBinding)
@@ -587,13 +583,13 @@ struct AnnotationCanvas: View {
             dragOperation = .croppingSelection(start: start, end: point)
 
         case .movingArrow(let id, let initialStart, let initialEnd, let mask):
-            arrows.update(id: id) { arrow in
+            annotations.updateArrow(id: id) { arrow in
                 if mask.contains(.start) { arrow.start = initialStart + translation }
                 if mask.contains(.end)   { arrow.end   = initialEnd + translation }
             }
 
         case .movingRectangle(let id, let initial):
-            rectangles.update(id: id) {
+            annotations.updateRectangle(id: id) {
                 $0.rect = initial.offsetBy(dx: translation.width, dy: translation.height)
             }
 
@@ -607,7 +603,7 @@ struct AnnotationCanvas: View {
                 width:  translation.width * cosA - translation.height * sinA,
                 height: translation.width * sinA + translation.height * cosA
             )
-            rectangles.update(id: id) {
+            annotations.updateRectangle(id: id) {
                 $0.rect = resizedRotatedRect(
                     initial: initial, rotation: rotation,
                     handle: handle, localTranslation: localTrans
@@ -615,7 +611,7 @@ struct AnnotationCanvas: View {
             }
 
         case .rotatingRectangle(let id, let initialRotation, let referenceAngle, let center):
-            rectangles.update(id: id) { rectangle in
+            annotations.updateRectangle(id: id) { rectangle in
                 let currentAngle = atan2(point.y - center.y, point.x - center.x) * 180 / .pi
                 let raw = initialRotation + (currentAngle - referenceAngle)
                 rectangle.rotation = snappedRotation(raw)
@@ -625,12 +621,12 @@ struct AnnotationCanvas: View {
             }
 
         case .movingText(let id, let initial):
-            texts.update(id: id) { $0.position = initial + translation }
+            annotations.updateText(id: id) { $0.position = initial + translation }
 
         case .scalingText(let id, let axis, let initialScaleX, let initialScaleY,
                          let center, let paddedWidth, let paddedHeight, let initialRef):
             guard initialRef > 0.001 else { break }
-            texts.update(id: id) { text in
+            annotations.updateText(id: id) { text in
                 let rad = text.rotation * .pi / 180
                 var newSX = initialScaleX
                 var newSY = initialScaleY
@@ -680,27 +676,14 @@ struct AnnotationCanvas: View {
                 initialSelection: initialSelection, additive: additive
             )
 
-        case .movingMultiple(let initialArrows, let initialTexts, let initialRectangles):
-            for (id, initial) in initialArrows {
-                arrows.update(id: id) { arrow in
-                    arrow.start = initial.start + translation
-                    arrow.end = initial.end + translation
-                }
-            }
-            for (id, initialPos) in initialTexts {
-                texts.update(id: id) { $0.position = initialPos + translation }
-            }
-            for (id, initialRect) in initialRectangles {
-                rectangles.update(id: id) {
-                    $0.rect = initialRect.offsetBy(
-                        dx: translation.width, dy: translation.height
-                    )
-                }
+        case .movingMultiple(let initialSnapshots):
+            for (id, initial) in initialSnapshots {
+                annotations.update(id: id) { $0 = initial.translated(by: translation) }
             }
 
         case .rotatingText(let id, let initialRotation, let referenceAngle, let center,
                            let paddedWidth, let paddedHeight, let scaleX, let scaleY):
-            texts.update(id: id) { text in
+            annotations.updateText(id: id) { text in
                 let currentAngle = atan2(point.y - center.y, point.x - center.x) * 180 / .pi
                 let newRotation = snappedRotation(initialRotation + (currentAngle - referenceAngle))
                 text.rotation = newRotation
@@ -781,7 +764,7 @@ struct AnnotationCanvas: View {
         switch hit {
         case .arrow(let id, let zone):
             selectedAnnotationIds = [id]
-            guard let arrow = arrows.first(where: { $0.id == id }) else { return nil }
+            guard let arrow = annotations.first(where: { $0.id == id })?.arrow else { return nil }
             let mask: ArrowEndpointMask
             switch zone {
             case .startEndpoint: mask = .start
@@ -795,7 +778,7 @@ struct AnnotationCanvas: View {
 
         case .text(let id, let zone):
             selectedAnnotationIds = [id]
-            guard let annotation = texts.first(where: { $0.id == id }) else { return nil }
+            guard let annotation = annotations.first(where: { $0.id == id })?.text else { return nil }
             switch zone {
             case .handle(let handlePos):
                 return beginTextScaling(for: annotation, handle: handlePos)
@@ -809,7 +792,7 @@ struct AnnotationCanvas: View {
 
         case .rectangle(let id, let zone):
             selectedAnnotationIds = [id]
-            guard let rectangle = rectangles.first(where: { $0.id == id }) else { return nil }
+            guard let rectangle = annotations.first(where: { $0.id == id })?.rectangle else { return nil }
             switch zone {
             case .body:
                 return .movingRectangle(id: id, initialRect: rectangle.rect)
@@ -829,25 +812,15 @@ struct AnnotationCanvas: View {
         }
     }
 
-    /// Snapshots every selected annotation's current geometry so a drag can
-    /// translate them all from a stable base.
+    /// Snapshots every selected annotation so a drag can translate them all
+    /// from a stable base.
     private func beginMovingMultiple() -> DragOperation {
         let ids = selectedAnnotationIds
-        var initialArrows: [UUID: (start: CGPoint, end: CGPoint)] = [:]
-        var initialTexts: [UUID: CGPoint] = [:]
-        var initialRectangles: [UUID: CGRect] = [:]
-        for arrow in arrows where ids.contains(arrow.id) {
-            initialArrows[arrow.id] = (arrow.start, arrow.end)
+        var initial: [UUID: Annotation] = [:]
+        for annotation in annotations where ids.contains(annotation.id) {
+            initial[annotation.id] = annotation
         }
-        for text in texts where ids.contains(text.id) {
-            initialTexts[text.id] = text.position
-        }
-        for rectangle in rectangles where ids.contains(rectangle.id) {
-            initialRectangles[rectangle.id] = rectangle.rect
-        }
-        return .movingMultiple(
-            arrows: initialArrows, texts: initialTexts, rectangles: initialRectangles
-        )
+        return .movingMultiple(initial: initial)
     }
 
     /// Builds a `rotatingRectangle` drag operation anchored at the rect's
@@ -874,7 +847,7 @@ struct AnnotationCanvas: View {
         if case .creatingArrow(let start, _) = dragOperation {
             let end = value.location
             let arrow = ArrowAnnotation(start: start, end: end, color: selectedColor)
-            arrows.append(arrow)
+            annotations.append(.arrow(arrow))
             selectedAnnotationIds = [arrow.id]
             selectedTool = nil
         } else if case .creatingRectangle(let start, _) = dragOperation {
@@ -891,7 +864,7 @@ struct AnnotationCanvas: View {
                     color: selectedColor,
                     style: rectangleFillStyle
                 )
-                rectangles.append(rectangle)
+                annotations.append(.rectangle(rectangle))
                 selectedAnnotationIds = [rectangle.id]
             }
             selectedTool = nil
@@ -916,7 +889,7 @@ struct AnnotationCanvas: View {
             // Normalize at the end of a resize so flipped rects are stored
             // with positive width/height. Hit testing already standardizes,
             // but keeping the stored value tidy avoids surprises elsewhere.
-            rectangles.update(id: id) { $0.rect = $0.rect.standardized }
+            annotations.updateRectangle(id: id) { $0.rect = $0.rect.standardized }
         } else if case .croppingSelection(let start, _) = dragOperation {
             let end = value.location
             let imageBounds = CGRect(origin: .zero, size: imageSize)
@@ -998,7 +971,7 @@ struct AnnotationCanvas: View {
             text: "",
             color: selectedColor
         )
-        texts.append(annotation)
+        annotations.append(.text(annotation))
         editing = EditingState(id: annotation.id, originalText: "")
         focusedTextId = annotation.id
         selectedAnnotationIds = [annotation.id]
@@ -1006,28 +979,27 @@ struct AnnotationCanvas: View {
     }
 
     private func startEditing(id: UUID) {
-        guard let annotation = texts.first(where: { $0.id == id }) else { return }
+        guard let annotation = annotations.first(where: { $0.id == id })?.text else { return }
         onBeginEdit()
         editing = EditingState(id: id, originalText: annotation.text)
         selectedAnnotationIds = [id]
     }
 
     private func commitTextEditing(id: UUID) {
-        if let index = texts.firstIndex(where: { $0.id == id }) {
-            if texts[index].text.isEmpty {
-                texts.remove(at: index)
-            }
+        if let index = annotations.firstIndex(where: { $0.id == id }),
+           annotations[index].text?.text.isEmpty == true {
+            annotations.remove(at: index)
         }
         editing = nil
         focusedTextId = nil
     }
 
     private func cancelTextEditing(id: UUID) {
-        if let index = texts.firstIndex(where: { $0.id == id }) {
+        if let index = annotations.firstIndex(where: { $0.id == id }) {
             if let original = editing?.originalText, !original.isEmpty {
-                texts[index].text = original
+                annotations.updateText(id: id) { $0.text = original }
             } else {
-                texts.remove(at: index)
+                annotations.remove(at: index)
             }
         }
         // The snapshot pushed at the start of editing now represents a no-op,
@@ -1311,13 +1283,9 @@ private enum DragOperation {
         scaleY: CGFloat
     )
     /// Translates several annotations together — the body-drag flavour of a
-    /// multi-selection. Each entry stores the initial geometry so the drag
-    /// translation can be applied from a stable base.
-    case movingMultiple(
-        arrows: [UUID: (start: CGPoint, end: CGPoint)],
-        texts: [UUID: CGPoint],
-        rectangles: [UUID: CGRect]
-    )
+    /// multi-selection. Each entry stores the annotation as it was at drag
+    /// start so the translation can be applied from a stable base.
+    case movingMultiple(initial: [UUID: Annotation])
     /// Drag-rectangle (marquee) for selecting annotations en masse. Live-
     /// updates `selectedAnnotationIds` as the user drags. `initialSelection`
     /// is the set carried over from before the drag — non-empty only when
@@ -1335,13 +1303,4 @@ private enum DragOperation {
 /// Translates a point by a SwiftUI gesture translation.
 private func + (point: CGPoint, translation: CGSize) -> CGPoint {
     CGPoint(x: point.x + translation.width, y: point.y + translation.height)
-}
-
-private extension Array where Element: Identifiable {
-    /// Locates the element with the given id and applies an in-place mutation.
-    /// Does nothing if no matching element exists.
-    mutating func update(id: Element.ID, _ body: (inout Element) -> Void) {
-        guard let i = firstIndex(where: { $0.id == id }) else { return }
-        body(&self[i])
-    }
 }

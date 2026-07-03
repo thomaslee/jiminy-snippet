@@ -74,128 +74,151 @@ enum AnnotationHit {
     }
 }
 
-/// Hit-tests a point against all annotations.
-/// Checks texts first, then rectangles, then arrows — all in reverse order so
-/// the topmost (most recently added) annotation wins.
+/// Hit-tests a point against all annotations, walking the array in reverse so
+/// the topmost (most recently added) annotation wins regardless of kind.
 /// Endpoint/resize handles are only hit-testable when the annotation is selected.
 func hitTestAnnotations(
     at point: CGPoint,
-    arrows: [ArrowAnnotation],
-    texts: [TextAnnotation],
-    rectangles: [RectangleAnnotation],
+    annotations: [Annotation],
     selectedId: UUID?,
     textSizes: [UUID: CGSize]
 ) -> AnnotationHit? {
-    // Check texts in reverse (topmost first)
-    for annotation in texts.reversed() {
-        guard let size = textSizes[annotation.id] else { continue }
-
-        let localPoint = AnnotationRenderer.canvasToLocal(
-            point, origin: annotation.position, angle: annotation.rotation
-        )
-        let padded = RenderConstants.paddedTextSize(size)
-        let scaledSize = CGSize(
-            width: padded.width * annotation.scaleX,
-            height: padded.height * annotation.scaleY
-        )
-        let localRect = CGRect(origin: .zero, size: scaledSize)
-
-        // Check handles first (only if selected). Rotate handle wins over the
-        // top-center resize handle if both are within the hit radius — they
-        // sit on the same vertical line so the rotate handle (further from
-        // the box) only hits when the user reaches above the bounding box.
-        if annotation.id == selectedId {
-            let rotatePoint = AnnotationRenderer.rotateHandleLocalPoint(w: scaledSize.width)
-            if distance(localPoint, rotatePoint) < RenderConstants.handleHitRadius {
-                return .text(id: annotation.id, zone: .rotateHandle)
-            }
-            for pos in HandlePosition.allCases {
-                let handlePoint = pos.localPoint(scaledSize: scaledSize)
-                if distance(localPoint, handlePoint) < RenderConstants.handleHitRadius {
-                    return .text(id: annotation.id, zone: .handle(pos))
-                }
-            }
+    for annotation in annotations.reversed() {
+        let isSelected = annotation.id == selectedId
+        let hit: AnnotationHit?
+        switch annotation {
+        case .text(let text):
+            hit = hitTestText(text, at: point, isSelected: isSelected, textSizes: textSizes)
+        case .rectangle(let rectangle):
+            hit = hitTestRectangle(rectangle, at: point, isSelected: isSelected)
+        case .arrow(let arrow):
+            hit = hitTestArrow(arrow, at: point, isSelected: isSelected)
         }
-
-        // Check body
-        if localRect.contains(localPoint) {
-            return .text(id: annotation.id, zone: .body)
-        }
+        if let hit { return hit }
     }
+    return nil
+}
 
-    // Check rectangles in reverse
-    for rectangle in rectangles.reversed() {
-        let bounds = rectangle.rect.standardized
-        guard bounds.width > 0, bounds.height > 0 else { continue }
+private func hitTestText(
+    _ annotation: TextAnnotation,
+    at point: CGPoint,
+    isSelected: Bool,
+    textSizes: [UUID: CGSize]
+) -> AnnotationHit? {
+    guard let size = textSizes[annotation.id] else { return nil }
 
-        // Convert the canvas-space hit point into the rect's local frame
-        // (origin at top-left, +x along the rotated edge), so handle and body
-        // tests can be written as if the rect were axis-aligned.
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        let centered = AnnotationRenderer.canvasToLocal(
-            point, origin: center, angle: rectangle.rotation
-        )
-        let localPoint = CGPoint(x: centered.x + bounds.width / 2,
-                                 y: centered.y + bounds.height / 2)
-        let localBounds = CGRect(origin: .zero, size: bounds.size)
+    let localPoint = AnnotationRenderer.canvasToLocal(
+        point, origin: annotation.position, angle: annotation.rotation
+    )
+    let padded = RenderConstants.paddedTextSize(size)
+    let scaledSize = CGSize(
+        width: padded.width * annotation.scaleX,
+        height: padded.height * annotation.scaleY
+    )
+    let localRect = CGRect(origin: .zero, size: scaledSize)
 
-        // Check handles first (only if selected). Rotation handle wins over
-        // the top-center resize handle when both are within reach.
-        if rectangle.id == selectedId {
-            let rotatePoint = AnnotationRenderer.rotateHandleLocalPoint(w: bounds.width)
-            if distance(localPoint, rotatePoint) < RenderConstants.handleHitRadius {
-                return .rectangle(id: rectangle.id, zone: .rotateHandle)
-            }
-            for pos in HandlePosition.allCases {
-                let handlePoint = pos.localPoint(scaledSize: bounds.size)
-                if distance(localPoint, handlePoint) < RenderConstants.handleHitRadius {
-                    return .rectangle(id: rectangle.id, zone: .handle(pos))
-                }
-            }
+    // Check handles first (only if selected). Rotate handle wins over the
+    // top-center resize handle if both are within the hit radius — they
+    // sit on the same vertical line so the rotate handle (further from
+    // the box) only hits when the user reaches above the bounding box.
+    if isSelected {
+        let rotatePoint = AnnotationRenderer.rotateHandleLocalPoint(w: scaledSize.width)
+        if distance(localPoint, rotatePoint) < RenderConstants.handleHitRadius {
+            return .text(id: annotation.id, zone: .rotateHandle)
         }
-
-        // Check body. Filled rectangles are hit anywhere inside the bounds;
-        // outlined rectangles are hit only within a narrow band around the
-        // stroke so the user can click through to annotations sitting
-        // "behind" an empty rectangle.
-        switch rectangle.style {
-        case .filled:
-            if localBounds.contains(localPoint) {
-                return .rectangle(id: rectangle.id, zone: .body)
-            }
-        case .outlined:
-            let tolerance = max(8, rectangle.lineWidth * 2.5 / 2 + 4)
-            let outer = localBounds.insetBy(dx: -tolerance, dy: -tolerance)
-            let inner = localBounds.insetBy(dx: tolerance, dy: tolerance)
-            // inner.isNull when the rectangle is narrower than 2×tolerance —
-            // treat tiny outlined rectangles as fully hit-testable so they
-            // don't become impossible to grab.
-            let innerHit = inner.isNull ? false : inner.contains(localPoint)
-            if outer.contains(localPoint), !innerHit {
-                return .rectangle(id: rectangle.id, zone: .body)
+        for pos in HandlePosition.allCases {
+            let handlePoint = pos.localPoint(scaledSize: scaledSize)
+            if distance(localPoint, handlePoint) < RenderConstants.handleHitRadius {
+                return .text(id: annotation.id, zone: .handle(pos))
             }
         }
     }
 
-    // Check arrows in reverse
-    for arrow in arrows.reversed() {
-        // Check endpoints first (only if selected)
-        if arrow.id == selectedId {
-            if distance(point, arrow.start) < RenderConstants.handleHitRadius {
-                return .arrow(id: arrow.id, zone: .startEndpoint)
-            }
-            if distance(point, arrow.end) < RenderConstants.handleHitRadius {
-                return .arrow(id: arrow.id, zone: .endEndpoint)
-            }
-        }
+    // Check body
+    if localRect.contains(localPoint) {
+        return .text(id: annotation.id, zone: .body)
+    }
+    return nil
+}
 
-        // Check body (distance to line segment)
-        let dist = distanceToSegment(point: point, segStart: arrow.start, segEnd: arrow.end)
-        if dist < RenderConstants.arrowHitWidth / 2 {
-            return .arrow(id: arrow.id, zone: .body)
+private func hitTestRectangle(
+    _ rectangle: RectangleAnnotation,
+    at point: CGPoint,
+    isSelected: Bool
+) -> AnnotationHit? {
+    let bounds = rectangle.rect.standardized
+    guard bounds.width > 0, bounds.height > 0 else { return nil }
+
+    // Convert the canvas-space hit point into the rect's local frame
+    // (origin at top-left, +x along the rotated edge), so handle and body
+    // tests can be written as if the rect were axis-aligned.
+    let center = CGPoint(x: bounds.midX, y: bounds.midY)
+    let centered = AnnotationRenderer.canvasToLocal(
+        point, origin: center, angle: rectangle.rotation
+    )
+    let localPoint = CGPoint(x: centered.x + bounds.width / 2,
+                             y: centered.y + bounds.height / 2)
+    let localBounds = CGRect(origin: .zero, size: bounds.size)
+
+    // Check handles first (only if selected). Rotation handle wins over
+    // the top-center resize handle when both are within reach.
+    if isSelected {
+        let rotatePoint = AnnotationRenderer.rotateHandleLocalPoint(w: bounds.width)
+        if distance(localPoint, rotatePoint) < RenderConstants.handleHitRadius {
+            return .rectangle(id: rectangle.id, zone: .rotateHandle)
+        }
+        for pos in HandlePosition.allCases {
+            let handlePoint = pos.localPoint(scaledSize: bounds.size)
+            if distance(localPoint, handlePoint) < RenderConstants.handleHitRadius {
+                return .rectangle(id: rectangle.id, zone: .handle(pos))
+            }
         }
     }
 
+    // Check body. Filled rectangles are hit anywhere inside the bounds;
+    // outlined rectangles are hit only within a narrow band around the
+    // stroke so the user can click through to annotations sitting
+    // "behind" an empty rectangle.
+    switch rectangle.style {
+    case .filled:
+        if localBounds.contains(localPoint) {
+            return .rectangle(id: rectangle.id, zone: .body)
+        }
+    case .outlined:
+        let tolerance = max(8, rectangle.lineWidth * 2.5 / 2 + 4)
+        let outer = localBounds.insetBy(dx: -tolerance, dy: -tolerance)
+        let inner = localBounds.insetBy(dx: tolerance, dy: tolerance)
+        // inner.isNull when the rectangle is narrower than 2×tolerance —
+        // treat tiny outlined rectangles as fully hit-testable so they
+        // don't become impossible to grab.
+        let innerHit = inner.isNull ? false : inner.contains(localPoint)
+        if outer.contains(localPoint), !innerHit {
+            return .rectangle(id: rectangle.id, zone: .body)
+        }
+    }
+    return nil
+}
+
+private func hitTestArrow(
+    _ arrow: ArrowAnnotation,
+    at point: CGPoint,
+    isSelected: Bool
+) -> AnnotationHit? {
+    // Check endpoints first (only if selected)
+    if isSelected {
+        if distance(point, arrow.start) < RenderConstants.handleHitRadius {
+            return .arrow(id: arrow.id, zone: .startEndpoint)
+        }
+        if distance(point, arrow.end) < RenderConstants.handleHitRadius {
+            return .arrow(id: arrow.id, zone: .endEndpoint)
+        }
+    }
+
+    // Check body (distance to line segment)
+    let dist = distanceToSegment(point: point, segStart: arrow.start, segEnd: arrow.end)
+    if dist < RenderConstants.arrowHitWidth / 2 {
+        return .arrow(id: arrow.id, zone: .body)
+    }
     return nil
 }
 
