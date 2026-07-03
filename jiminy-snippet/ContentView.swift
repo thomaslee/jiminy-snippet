@@ -10,18 +10,16 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Environment(ScreenshotManager.self) private var screenshotManager
+    @Environment(AnnotationDocument.self) private var document
 
     @State private var selectedTool: AnnotationTool? = nil
     @State private var selectedColorIndex: Int = 0
     @State private var scale: CGFloat = 1.0
     @State private var canvasSize: CGSize = .zero
 
-    @State private var annotations: [Annotation] = []
     @State private var rectangleFillStyle: RectangleFillStyle = .outlined
-    @State private var selectedAnnotationIds: Set<UUID> = []
     @State private var cropMode: Bool = false
     @State private var cropRect: CGRect? = nil
-    @State private var undoHistory = UndoHistory()
     /// Pre-pixelated copy of the current image, regenerated when the
     /// underlying image changes (new capture, crop, rotate, resize, pixelate
     /// commit). Used as the live preview while the user drags the destructive
@@ -42,9 +40,7 @@ struct ContentView: View {
     var body: some View {
         mainContent
             .frame(minWidth: 800, minHeight: 600)
-            .onChange(of: annotations) { markUnsaved() }
-            .onChange(of: screenshotManager.capturedImage) { oldImage, newImage in
-                markUnsaved()
+            .onChange(of: document.image) { oldImage, newImage in
                 // Re-fit only when the image dimensions actually change
                 // (crop/resize/rotate/new-capture). A same-size swap — e.g.
                 // committing a pixelate — keeps the user's current zoom.
@@ -56,7 +52,7 @@ struct ContentView: View {
             .onChange(of: screenshotManager.incomingCapture) {
                 handleIncomingCapture()
             }
-            .onChange(of: selectedAnnotationIds) {
+            .onChange(of: document.selectedAnnotationIds) {
                 syncPaletteToSelection()
             }
             .task {
@@ -73,12 +69,12 @@ struct ContentView: View {
                 handleCaptureError()
             }
             .modifier(SceneCommandValues(
-                hasImage: screenshotManager.capturedImage != nil,
+                hasImage: document.image != nil,
                 canZoomIn: scale < maxScale,
                 canZoomOut: scale > minScale,
-                canUndo: undoHistory.canUndo,
-                canRedo: undoHistory.canRedo,
-                canDuplicate: !selectedAnnotationIds.isEmpty,
+                canUndo: document.canUndo,
+                canRedo: document.canRedo,
+                canDuplicate: !document.selectedAnnotationIds.isEmpty,
                 copy: copyToClipboard,
                 paste: pasteFromClipboard,
                 save: save,
@@ -89,7 +85,7 @@ struct ContentView: View {
                 zoomActualSize: zoomToActualSize,
                 undo: undo,
                 redo: redo,
-                duplicate: duplicateSelectedAnnotation
+                duplicate: document.duplicateSelection
             ))
     }
 
@@ -102,13 +98,11 @@ struct ContentView: View {
                 .background(.bar)
             Divider()
 
-            if let image = screenshotManager.capturedImage {
+            if let image = document.image {
                 AnnotationCanvas(
                     image: image,
                     pixelatedImage: pixelatedImage,
-                    annotations: $annotations,
                     selectedTool: $selectedTool,
-                    selectedAnnotationIds: $selectedAnnotationIds,
                     selectedColor: selectedColor,
                     rectangleFillStyle: rectangleFillStyle,
                     scale: $scale,
@@ -116,12 +110,8 @@ struct ContentView: View {
                     maxScale: maxScale,
                     cropMode: $cropMode,
                     cropRect: $cropRect,
-                    dragOutFilename: screenshotManager.currentFileURL?.lastPathComponent,
                     onCropApply: applyCrop,
-                    onCropCancel: cancelCrop,
-                    onBeginEdit: recordSnapshot,
-                    onDiscardEdit: discardLastSnapshot,
-                    onApplyPixelate: applyPixelation
+                    onCropCancel: cancelCrop
                 )
                 .onGeometryChange(for: CGSize.self) { proxy in
                     proxy.size
@@ -191,7 +181,7 @@ struct ContentView: View {
 
     private var toolbar: some View {
         HStack(spacing: 12) {
-            if screenshotManager.capturedImage != nil {
+            if document.image != nil {
                 captureMenu
                 Divider().frame(height: 24)
                 toolPicker
@@ -307,9 +297,8 @@ struct ContentView: View {
             informativeText: "Taking a new screenshot will discard your current edits. Continue?",
             proceedButtonTitle: "Continue"
         ) else { return }
-        clearAnnotations()
-        screenshotManager.currentFileURL = nil
-        screenshotManager.capturedImage = image
+        document.currentFileURL = nil
+        document.loadImage(image)
     }
 
     /// Surfaces the most recent capture failure as a toast when the editor
@@ -347,7 +336,7 @@ struct ContentView: View {
         informativeText: String,
         proceedButtonTitle: String
     ) -> Bool {
-        guard screenshotManager.hasUnsavedChanges else { return true }
+        guard document.hasUnsavedChanges else { return true }
         return ScreenshotManager.confirmDiscardUnsavedChanges(
             messageText: messageText,
             informativeText: informativeText,
@@ -406,17 +395,7 @@ struct ContentView: View {
 
     private func selectColor(at index: Int) {
         selectedColorIndex = index
-        let color = AnnotationPalette.colors[index].color
-        guard !selectedAnnotationIds.isEmpty else { return }
-
-        let ids = selectedAnnotationIds
-        let needsChange = annotations.contains { ids.contains($0.id) && $0.color != color }
-        guard needsChange else { return }
-
-        recordSnapshot()
-        for i in annotations.indices where ids.contains(annotations[i].id) {
-            annotations[i].color = color
-        }
+        document.applyColorToSelection(AnnotationPalette.colors[index].color)
     }
 
     /// Whether the rectangle style toggle should be visible — either the
@@ -425,8 +404,8 @@ struct ContentView: View {
     /// place).
     private var isRectangleContextActive: Bool {
         if selectedTool == .rectangle { return true }
-        return annotations.contains {
-            selectedAnnotationIds.contains($0.id) && $0.rectangle != nil
+        return document.annotations.contains {
+            document.selectedAnnotationIds.contains($0.id) && $0.rectangle != nil
         }
     }
 
@@ -456,15 +435,7 @@ struct ContentView: View {
     /// currently selected, applies the style to it in place (undoable).
     private func setRectangleFillStyle(_ style: RectangleFillStyle) {
         rectangleFillStyle = style
-        let ids = selectedAnnotationIds
-        let needsChange = annotations.contains {
-            ids.contains($0.id) && $0.rectangle.map { $0.style != style } == true
-        }
-        guard needsChange else { return }
-        recordSnapshot()
-        for id in ids {
-            annotations.updateRectangle(id: id) { $0.style = style }
-        }
+        document.applyRectangleStyleToSelection(style)
     }
 
     private var rotateControls: some View {
@@ -505,27 +476,8 @@ struct ContentView: View {
         .help("Resize image")
     }
 
-    private func applyResize(to newSize: NSSize) {
-        guard let image = screenshotManager.capturedImage,
-              let resized = image.resized(to: newSize)
-        else { return }
-
-        let oldSize = image.size
-        guard oldSize.width > 0, oldSize.height > 0 else { return }
-
-        recordSnapshot()
-
-        let sx = newSize.width / oldSize.width
-        let sy = newSize.height / oldSize.height
-        annotations = annotations.map { $0.scaled(sx: sx, sy: sy) }
-
-        selectedAnnotationIds.removeAll()
-        screenshotManager.capturedImage = resized
-        // markUnsaved() and zoomToFit() are handled by onChange observers
-    }
-
     private func showCustomResizeSheet() {
-        guard let image = screenshotManager.capturedImage else { return }
+        guard let image = document.image else { return }
         // Use pixel dimensions so the dialog matches what the status bar
         // displays — and so typing "1920" produces a 1920-pixel-wide image.
         let dimensions = pixelDimensions(of: image)
@@ -553,7 +505,10 @@ struct ContentView: View {
               model.width >= 1, model.height >= 1
         else { return }
 
-        applyResize(to: NSSize(width: CGFloat(model.width), height: CGFloat(model.height)))
+        document.resizeImage(
+            to: NSSize(width: CGFloat(model.width), height: CGFloat(model.height))
+        )
+        // zoomToFit() is handled by the onChange observer on document.image
     }
 
     private var exportMenu: some View {
@@ -583,9 +538,9 @@ struct ContentView: View {
     /// for single-selection — a heterogeneous multi-selection has no obvious
     /// "current" color to surface, so we leave the toolbar alone.
     private func syncPaletteToSelection() {
-        guard selectedAnnotationIds.count == 1,
-              let id = selectedAnnotationIds.first,
-              let annotation = annotations.first(where: { $0.id == id })
+        guard document.selectedAnnotationIds.count == 1,
+              let id = document.selectedAnnotationIds.first,
+              let annotation = document.annotations.first(where: { $0.id == id })
         else { return }
         if let rectangle = annotation.rectangle {
             // Sync the style toggle so the toolbar reflects the selection.
@@ -596,110 +551,29 @@ struct ContentView: View {
         }
     }
 
-    private func clearAnnotations() {
-        annotations.removeAll()
-        undoHistory.clear()
-    }
-
     /// Recomputes the cached pixelated copy of the current image. Cheap when
     /// no image is loaded; otherwise runs CIPixellate once on the source.
-    /// Called whenever `capturedImage` changes — fresh capture, crop, rotate,
+    /// Called whenever `document.image` changes — fresh capture, crop, rotate,
     /// resize, paste, undo/redo that swaps the image, or a pixelate apply.
     private func regeneratePixelatedImage() {
-        guard let image = screenshotManager.capturedImage else {
+        guard let image = document.image else {
             pixelatedImage = nil
             return
         }
         pixelatedImage = image.pixelated(blockSize: PixelateDefaults.blockSize)
     }
 
-    /// Applies a destructive pixelation to the captured image, replacing the
-    /// rect's pixels with their pixelated equivalents. The canvas's
-    /// `onBeginEdit` already pushed an undo snapshot at drag start, so the
-    /// only state to mutate here is the image itself — the cached pixelated
-    /// copy gets regenerated by the `capturedImage` onChange observer.
-    private func applyPixelation(rect: CGRect) {
-        guard let image = screenshotManager.capturedImage,
-              let updated = image.pixelating(rect: rect, blockSize: PixelateDefaults.blockSize)
-        else {
-            return
-        }
-        screenshotManager.capturedImage = updated
-        // Pixelating doesn't touch annotations, but it does change what's
-        // beneath them — drop selection so the user reacts to the new image
-        // rather than carrying selection state from the pre-redaction view.
-        selectedAnnotationIds.removeAll()
-    }
-
-    /// Captures the current editable state so that the next mutation can be
-    /// undone. Called by the canvas at the start of every discrete edit (drag,
-    /// text create/edit, delete) and directly from ContentView for crop,
-    /// rotate, and color changes.
-    private func recordSnapshot() {
-        guard let image = screenshotManager.capturedImage else { return }
-        undoHistory.push(EditSnapshot(image: image, annotations: annotations))
-    }
-
-    /// Drops the most recently pushed snapshot. Used when an in-flight edit is
-    /// abandoned (e.g. text editing is cancelled) so cancelled operations don't
-    /// leave no-op entries on the stack.
-    private func discardLastSnapshot() {
-        undoHistory.discardLast()
-    }
-
-    /// Duplicates every selected annotation, offsetting each copy so the user
-    /// can see it landed on top of the original. Selection moves to the new
-    /// copies so repeated invocations stack diagonally.
-    private func duplicateSelectedAnnotation() {
-        guard !selectedAnnotationIds.isEmpty else { return }
-        let ids = selectedAnnotationIds
-        let offset = CGSize(width: 20, height: 20)
-
-        let toDuplicate = annotations.filter { ids.contains($0.id) }
-        guard !toDuplicate.isEmpty else { return }
-
-        recordSnapshot()
-
-        var newSelection: Set<UUID> = []
-        for annotation in toDuplicate {
-            let copy = annotation.duplicated(offset: offset)
-            annotations.append(copy)
-            newSelection.insert(copy.id)
-        }
-        selectedAnnotationIds = newSelection
-    }
-
     private func undo() {
-        guard let current = currentEditSnapshot(),
-              let previous = undoHistory.popUndo(current: current)
-        else { return }
-        apply(snapshot: previous)
+        guard document.undo() else { return }
+        // Crop mode is view state, so the document can't exit it — but the
+        // in-progress crop is meaningless against the restored image.
+        if cropMode {
+            cancelCrop()
+        }
     }
 
     private func redo() {
-        guard let current = currentEditSnapshot(),
-              let next = undoHistory.popRedo(current: current)
-        else { return }
-        apply(snapshot: next)
-    }
-
-    /// Snapshot of the current editable state, used by undo/redo to stash the
-    /// "before" state onto the opposite stack. Returns nil if there's no image
-    /// loaded — in which case there's nothing to undo anyway.
-    private func currentEditSnapshot() -> EditSnapshot? {
-        guard let image = screenshotManager.capturedImage else { return nil }
-        return EditSnapshot(image: image, annotations: annotations)
-    }
-
-    /// Restores a snapshot produced by undo or redo. Clears selection and
-    /// exits crop mode because both become meaningless against the restored
-    /// state.
-    private func apply(snapshot: EditSnapshot) {
-        annotations = snapshot.annotations
-        if screenshotManager.capturedImage !== snapshot.image {
-            screenshotManager.capturedImage = snapshot.image
-        }
-        selectedAnnotationIds.removeAll()
+        guard document.redo() else { return }
         if cropMode {
             cancelCrop()
         }
@@ -712,22 +586,18 @@ struct ContentView: View {
             informativeText: "Pasting from the clipboard will discard your current edits. Continue?",
             proceedButtonTitle: "Continue"
         ) else { return }
-        clearAnnotations()
-        screenshotManager.capturedImage = image
-        // markUnsaved() and zoomToFit() are handled by onChange observers
+        document.loadImage(image)
+        // zoomToFit() is handled by the onChange observer on document.image
     }
 
     private func copyToClipboard() {
-        guard let image = screenshotManager.capturedImage else { return }
-
-        let rendered = ImageExporter.render(image: image, annotations: annotations)
-
+        guard let rendered = document.renderedImage() else { return }
         ImageExporter.copyToPasteboard(image: rendered)
         showToast(.copied)
     }
 
     private func save() {
-        if let url = screenshotManager.currentFileURL {
+        if let url = document.currentFileURL {
             writeCurrentImage(to: url)
         } else {
             saveAs()
@@ -735,11 +605,11 @@ struct ContentView: View {
     }
 
     private func saveAs() {
-        guard screenshotManager.capturedImage != nil else { return }
+        guard document.image != nil else { return }
 
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = screenshotManager.currentFileURL?.lastPathComponent ?? "screenshot.png"
+        panel.nameFieldStringValue = document.currentFileURL?.lastPathComponent ?? "screenshot.png"
         panel.canCreateDirectories = true
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -747,15 +617,10 @@ struct ContentView: View {
     }
 
     private func writeCurrentImage(to url: URL) {
-        guard let image = screenshotManager.capturedImage else { return }
-
-        let rendered = ImageExporter.render(image: image, annotations: annotations)
-
         do {
-            try ImageExporter.save(image: rendered, to: url)
-            screenshotManager.currentFileURL = url
-            screenshotManager.hasUnsavedChanges = false
-            showToast(.saved(url: url))
+            if try document.save(to: url) {
+                showToast(.saved(url: url))
+            }
         } catch {
             presentSaveError(url: url, error: error)
         }
@@ -795,7 +660,7 @@ struct ContentView: View {
     }
 
     private func zoomToFit() {
-        guard let image = screenshotManager.capturedImage else { return }
+        guard let image = document.image else { return }
         let availableSize = canvasSize
         guard availableSize.width > 0, availableSize.height > 0 else { return }
 
@@ -816,7 +681,7 @@ struct ContentView: View {
         } else {
             cropMode = true
             cropRect = nil
-            selectedAnnotationIds.removeAll()
+            document.selectedAnnotationIds.removeAll()
             selectedTool = nil
         }
     }
@@ -827,45 +692,17 @@ struct ContentView: View {
     }
 
     private func applyCrop() {
-        guard let rect = cropRect,
-              let image = screenshotManager.capturedImage,
-              let cropped = image.cropped(to: rect)
-        else {
-            cancelCrop()
-            return
+        if let rect = cropRect {
+            document.applyCrop(rect)
         }
-
-        recordSnapshot()
-
-        let offset = CGSize(width: -rect.origin.x, height: -rect.origin.y)
-        annotations = annotations.map { $0.translated(by: offset) }
-
-        selectedAnnotationIds.removeAll()
-        screenshotManager.capturedImage = cropped
         cropMode = false
         cropRect = nil
-        // markUnsaved() and zoomToFit() are handled by onChange observers
+        // zoomToFit() is handled by the onChange observer on document.image
     }
 
     private func rotateImageAndAnnotations(clockwise: Bool) {
-        guard let image = screenshotManager.capturedImage else { return }
-        recordSnapshot()
-        let w = image.size.width
-        let h = image.size.height
-
-        screenshotManager.capturedImage = image.rotated(clockwise: clockwise)
-
-        annotations = annotations.map {
-            $0.rotated90(clockwise: clockwise, imageWidth: w, imageHeight: h)
-        }
-        selectedAnnotationIds.removeAll()
-        // zoomToFit() and markUnsaved() are handled by onChange observers
-    }
-
-    private func markUnsaved() {
-        if screenshotManager.capturedImage != nil {
-            screenshotManager.hasUnsavedChanges = true
-        }
+        document.rotateImage(clockwise: clockwise)
+        // zoomToFit() is handled by the onChange observer on document.image
     }
 }
 
@@ -1092,4 +929,5 @@ private struct ExportToastView: View {
 #Preview {
     ContentView()
         .environment(ScreenshotManager())
+        .environment(AnnotationDocument())
 }

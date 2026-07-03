@@ -14,9 +14,7 @@ struct AnnotationCanvas: View {
     /// because the cache may be momentarily out of date right after the
     /// underlying image changes.
     let pixelatedImage: NSImage?
-    @Binding var annotations: [Annotation]
     @Binding var selectedTool: AnnotationTool?
-    @Binding var selectedAnnotationIds: Set<UUID>
     let selectedColor: Color
     let rectangleFillStyle: RectangleFillStyle
     @Binding var scale: CGFloat
@@ -24,22 +22,22 @@ struct AnnotationCanvas: View {
     let maxScale: CGFloat
     @Binding var cropMode: Bool
     @Binding var cropRect: CGRect?
-    /// Suggested filename for drag-out exports. Falls back to "screenshot.png"
-    /// when nil so the canvas can produce a sensible promise even before the
-    /// user has saved.
-    var dragOutFilename: String?
     var onCropApply: () -> Void = {}
     var onCropCancel: () -> Void = {}
-    /// Called immediately before any discrete edit that mutates `arrows`,
-    /// `texts`, or the image itself — the owner records an undo snapshot here.
-    var onBeginEdit: () -> Void = {}
-    /// Called when an in-flight edit is abandoned (e.g. text editing cancelled)
-    /// so the matching `onBeginEdit` snapshot can be discarded.
-    var onDiscardEdit: () -> Void = {}
-    /// Invoked when the user finishes drawing a pixelate region. The owner
-    /// burns the rect into the underlying image — pixelation is destructive
-    /// by design so a redacted area can't later be moved or deleted.
-    var onApplyPixelate: (CGRect) -> Void = { _ in }
+
+    /// Annotations, selection, and undo snapshots all live here; gesture
+    /// handlers mutate the document directly through the conveniences below.
+    @Environment(AnnotationDocument.self) private var document
+
+    private var annotations: [Annotation] {
+        get { document.annotations }
+        nonmutating set { document.annotations = newValue }
+    }
+
+    private var selectedAnnotationIds: Set<UUID> {
+        get { document.selectedAnnotationIds }
+        nonmutating set { document.selectedAnnotationIds = newValue }
+    }
 
     // MARK: - Gesture State
 
@@ -155,7 +153,7 @@ struct AnnotationCanvas: View {
         switch event.keyCode {
         case KeyCode.backspace, KeyCode.forwardDelete:
             if editing == nil, !selectedAnnotationIds.isEmpty {
-                deleteSelectedAnnotations()
+                document.deleteSelection()
                 return nil
             }
         case KeyCode.escape:
@@ -171,14 +169,6 @@ struct AnnotationCanvas: View {
             break
         }
         return event
-    }
-
-    private func deleteSelectedAnnotations() {
-        let ids = selectedAnnotationIds
-        guard annotations.contains(where: { ids.contains($0.id) }) else { return }
-        onBeginEdit()
-        annotations.removeAll { ids.contains($0.id) }
-        selectedAnnotationIds.removeAll()
     }
 
     // MARK: - Canvas
@@ -483,10 +473,12 @@ struct AnnotationCanvas: View {
     }
 
     private func dragOutSource() -> DragOutSource? {
+        // Fall back to "screenshot.png" when unsaved so the canvas produces a
+        // sensible file promise even before the user has saved.
         DragOutSource(
             image: image,
             annotations: annotations,
-            suggestedFilename: dragOutFilename ?? "screenshot.png"
+            suggestedFilename: document.currentFileURL?.lastPathComponent ?? "screenshot.png"
         )
     }
 
@@ -561,9 +553,9 @@ struct AnnotationCanvas: View {
             guard let op = beginDrag(at: value.startLocation) else { return }
             // Crop selection drags only touch `cropRect`, which isn't part of
             // the undoable canvas state — the actual crop is recorded later,
-            // in ContentView.applyCrop.
+            // in AnnotationDocument.applyCrop.
             if case .croppingSelection = op {} else {
-                onBeginEdit()
+                document.recordSnapshot()
             }
             dragOperation = op
             // Re-enter so the current translation is applied immediately,
@@ -877,12 +869,12 @@ struct AnnotationCanvas: View {
                 height: abs(end.y - start.y)
             )
             if rect.width > 1, rect.height > 1 {
-                onApplyPixelate(rect)
+                document.applyPixelation(rect: rect)
             } else {
                 // No region drawn — drop the snapshot taken at drag start so
                 // an accidental click on the pixelate tool doesn't burn an
                 // undo slot.
-                onDiscardEdit()
+                document.discardLastSnapshot()
             }
             selectedTool = nil
         } else if case .resizingRectangle(let id, _, _, _) = dragOperation {
@@ -965,7 +957,7 @@ struct AnnotationCanvas: View {
             commitTextEditing(id: editingId)
         }
 
-        onBeginEdit()
+        document.recordSnapshot()
         let annotation = TextAnnotation(
             position: location,
             text: "",
@@ -980,7 +972,7 @@ struct AnnotationCanvas: View {
 
     private func startEditing(id: UUID) {
         guard let annotation = annotations.first(where: { $0.id == id })?.text else { return }
-        onBeginEdit()
+        document.recordSnapshot()
         editing = EditingState(id: id, originalText: annotation.text)
         selectedAnnotationIds = [id]
     }
@@ -1005,7 +997,7 @@ struct AnnotationCanvas: View {
         // The snapshot pushed at the start of editing now represents a no-op,
         // since the cancel reverted to the pre-edit state. Drop it so the user
         // doesn't burn an undo slot stepping over cancelled edits.
-        onDiscardEdit()
+        document.discardLastSnapshot()
         editing = nil
         focusedTextId = nil
     }

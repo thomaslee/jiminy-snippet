@@ -11,6 +11,7 @@ import SwiftUI
 struct jiminy_snippetApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var screenshotManager = ScreenshotManager()
+    @State private var document = AnnotationDocument()
 
     var body: some Scene {
         // Singleton editor window. `.defaultLaunchBehavior(.suppressed)`
@@ -19,7 +20,8 @@ struct jiminy_snippetApp: App {
         Window("Jiminy Snippet", id: Self.mainWindowID) {
             ContentView()
                 .environment(screenshotManager)
-                .onAppear { appDelegate.screenshotManager = screenshotManager }
+                .environment(document)
+                .onAppear { appDelegate.document = document }
         }
         .defaultSize(width: 900, height: 700)
         .defaultLaunchBehavior(SettingsManager.shared.showCaptureWindowOnStartup ? .automatic : .suppressed)
@@ -400,7 +402,7 @@ extension FocusedValues {
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var screenshotManager: ScreenshotManager?
+    var document: AnnotationDocument?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar-first experience: no Dock icon, no auto-raised window at
@@ -441,8 +443,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let manager = screenshotManager,
-              manager.hasUnsavedChanges else {
+        guard let document,
+              document.hasUnsavedChanges else {
             return .terminateNow
         }
 

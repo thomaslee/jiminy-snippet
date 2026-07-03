@@ -25,19 +25,11 @@ enum CaptureRequest: Equatable {
 @Observable
 @MainActor
 final class ScreenshotManager {
-    var capturedImage: NSImage?
-    var hasUnsavedChanges = false
-    /// URL of the file backing the current screenshot, if it has been saved.
-    /// Reset to `nil` whenever a new image is loaded from a fresh source
-    /// (capture, paste) — but preserved through in-place edits like crop and
-    /// rotate so that Save can overwrite the existing file.
-    var currentFileURL: URL?
-
     /// A freshly-captured image awaiting ContentView's discard-confirmation
-    /// pass. Capture flows write here on success instead of mutating
-    /// `capturedImage` directly so the user is only ever prompted to discard
-    /// edits *after* a capture has actually been acquired — pressing Escape
-    /// during region selection or the timed countdown leaves this nil and the
+    /// pass. Capture flows write here on success instead of mutating the
+    /// document directly so the user is only ever prompted to discard edits
+    /// *after* a capture has actually been acquired — pressing Escape during
+    /// region selection or the timed countdown leaves this nil and the
     /// existing edits untouched.
     var incomingCapture: NSImage?
 
