@@ -31,9 +31,9 @@ final class AnnotationDocument {
     var selectedAnnotationIds: Set<UUID> = []
 
     /// URL of the file backing the current screenshot, if it has been saved.
-    /// Reset to `nil` whenever a new image is loaded from a fresh capture —
-    /// but preserved through in-place edits like crop and rotate so that Save
-    /// can overwrite the existing file.
+    /// Reset to `nil` whenever a new image is loaded from a fresh source
+    /// (capture, paste) — but preserved through in-place edits like crop and
+    /// rotate so that Save can overwrite the existing file.
     var currentFileURL: URL?
 
     var hasUnsavedChanges = false

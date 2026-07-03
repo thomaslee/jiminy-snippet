@@ -586,6 +586,10 @@ struct ContentView: View {
             informativeText: "Pasting from the clipboard will discard your current edits. Continue?",
             proceedButtonTitle: "Continue"
         ) else { return }
+        // The pasted image has no relationship to whatever file the previous
+        // screenshot was saved to — reset so ⌘S prompts for a fresh location
+        // instead of silently overwriting the old file.
+        document.currentFileURL = nil
         document.loadImage(image)
         // zoomToFit() is handled by the onChange observer on document.image
     }
