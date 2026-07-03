@@ -95,7 +95,7 @@ private final class RegionSelectionView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let origin = dragOrigin else { return }
         let current = convert(event.locationInWindow, from: nil)
-        currentRect = rectFrom(origin, to: current)
+        currentRect = CGRect(from: origin, to: current)
         needsDisplay = true
     }
 
@@ -105,7 +105,7 @@ private final class RegionSelectionView: NSView {
             return
         }
         let end = convert(event.locationInWindow, from: nil)
-        let rect = rectFrom(origin, to: end)
+        let rect = CGRect(from: origin, to: end)
 
         // Require a minimum drag size to avoid accidental clicks
         if rect.width < 5 || rect.height < 5 {
@@ -123,17 +123,6 @@ private final class RegionSelectionView: NSView {
     }
 
     override var acceptsFirstResponder: Bool { true }
-
-    // MARK: Helpers
-
-    private func rectFrom(_ a: CGPoint, to b: CGPoint) -> CGRect {
-        CGRect(
-            x: min(a.x, b.x),
-            y: min(a.y, b.y),
-            width: abs(b.x - a.x),
-            height: abs(b.y - a.y)
-        )
-    }
 
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .crosshair)

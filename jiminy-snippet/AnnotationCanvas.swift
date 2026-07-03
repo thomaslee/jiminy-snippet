@@ -41,7 +41,7 @@ struct AnnotationCanvas: View {
 
     // MARK: - Gesture State
 
-    @State private var dragOperation: DragOperation = .none
+    @State private var dragController = CanvasDragController()
     @State private var editing: EditingState?
     @FocusState private var focusedTextId: UUID?
     @State private var lastTapTime: Date?
@@ -83,6 +83,21 @@ struct AnnotationCanvas: View {
         hitTestAnnotations(
             at: point, annotations: annotations,
             selectedId: singleSelectedId, textSizes: textSizes
+        )
+    }
+
+    /// Per-event snapshot handed to the drag controller. Built fresh in each
+    /// gesture callback so modifier keys and tool state are always current.
+    private var dragContext: CanvasDragController.Context {
+        CanvasDragController.Context(
+            document: document,
+            imageSize: imageSize,
+            selectedTool: selectedTool,
+            selectedColor: selectedColor,
+            rectangleFillStyle: rectangleFillStyle,
+            cropMode: cropMode,
+            shiftPressed: NSEvent.modifierFlags.contains(.shift),
+            textSizes: textSizes
         )
     }
 
@@ -219,7 +234,7 @@ struct AnnotationCanvas: View {
                 }
             }
 
-            if case .creatingArrow(let start, let end) = dragOperation {
+            if case .creatingArrow(let start, let end) = dragController.operation {
                 AnnotationRenderer.drawCartoonArrow(
                     start: start,
                     end: end,
@@ -230,29 +245,18 @@ struct AnnotationCanvas: View {
                 )
             }
 
-            if case .creatingRectangle(let start, let end) = dragOperation {
+            if case .creatingRectangle(let start, let end) = dragController.operation {
                 let draft = RectangleAnnotation(
-                    rect: CGRect(
-                        x: min(start.x, end.x),
-                        y: min(start.y, end.y),
-                        width: abs(end.x - start.x),
-                        height: abs(end.y - start.y)
-                    ),
+                    rect: CGRect(from: start, to: end),
                     color: selectedColor,
                     style: rectangleFillStyle
                 )
                 AnnotationRenderer.drawRectangle(draft, selected: false, showHandles: false, in: &context)
             }
 
-            if case .creatingPixelate(let start, let end) = dragOperation {
-                let rect = CGRect(
-                    x: min(start.x, end.x),
-                    y: min(start.y, end.y),
-                    width: abs(end.x - start.x),
-                    height: abs(end.y - start.y)
-                )
+            if case .creatingPixelate(let start, let end) = dragController.operation {
                 AnnotationRenderer.drawPixelatePreview(
-                    rect: rect,
+                    rect: CGRect(from: start, to: end),
                     pixelatedSource: pixelatedImage,
                     canvasScale: scale,
                     in: &context
@@ -263,7 +267,7 @@ struct AnnotationCanvas: View {
                 drawCropOverlay(in: &context)
             }
 
-            if case .marqueeSelecting(let start, let end, _, _) = dragOperation {
+            if case .marqueeSelecting(let start, let end, _, _) = dragController.operation {
                 drawMarquee(start: start, end: end, in: &context)
             }
         }
@@ -271,19 +275,10 @@ struct AnnotationCanvas: View {
         .allowsHitTesting(false)
     }
 
-    private func marqueeRect(start: CGPoint, end: CGPoint) -> CGRect {
-        CGRect(
-            x: min(start.x, end.x),
-            y: min(start.y, end.y),
-            width: abs(end.x - start.x),
-            height: abs(end.y - start.y)
-        )
-    }
-
     /// Translucent fill plus a 1-device-pixel dashed outline. Stroke width is
     /// inverse-scaled so the marquee reads the same regardless of zoom.
     private func drawMarquee(start: CGPoint, end: CGPoint, in context: inout GraphicsContext) {
-        let rect = marqueeRect(start: start, end: end)
+        let rect = CGRect(from: start, to: end)
         let path = Path(rect)
         context.fill(path, with: .color(.accentColor.opacity(0.12)))
         let lineWidth = 1.0 / max(scale, 0.1)
@@ -292,81 +287,6 @@ struct AnnotationCanvas: View {
             with: .color(.accentColor.opacity(0.85)),
             style: StrokeStyle(lineWidth: lineWidth, dash: [4 * lineWidth, 3 * lineWidth])
         )
-    }
-
-    /// Returns the ids of every annotation whose axis-aligned bounding box
-    /// intersects `rect`. Touching counts (Finder-style), so a marquee that
-    /// merely grazes the edge of an annotation is enough to select it.
-    private func annotationsIntersecting(_ rect: CGRect) -> Set<UUID> {
-        var ids: Set<UUID> = []
-        for annotation in annotations {
-            let box: CGRect
-            switch annotation {
-            case .arrow(let arrow): box = arrowBoundingBox(arrow)
-            case .rectangle(let rectangle): box = rectangleBoundingBox(rectangle)
-            case .text(let text): box = textBoundingBox(text)
-            }
-            if box.intersects(rect) {
-                ids.insert(annotation.id)
-            }
-        }
-        return ids
-    }
-
-    private func arrowBoundingBox(_ arrow: ArrowAnnotation) -> CGRect {
-        let minX = min(arrow.start.x, arrow.end.x)
-        let minY = min(arrow.start.y, arrow.end.y)
-        let maxX = max(arrow.start.x, arrow.end.x)
-        let maxY = max(arrow.start.y, arrow.end.y)
-        // Pad to roughly the arrow head's half-width so the marquee picks up
-        // the full visual extent of the arrow rather than just the centerline.
-        let pad = arrow.lineWidth * 3.2
-        return CGRect(
-            x: minX - pad, y: minY - pad,
-            width: (maxX - minX) + pad * 2, height: (maxY - minY) + pad * 2
-        )
-    }
-
-    private func rectangleBoundingBox(_ rectangle: RectangleAnnotation) -> CGRect {
-        let bounds = rectangle.rect.standardized
-        guard rectangle.rotation != 0 else { return bounds }
-        let rad = rectangle.rotation * .pi / 180
-        let cosA = abs(cos(rad))
-        let sinA = abs(sin(rad))
-        let w = bounds.width * cosA + bounds.height * sinA
-        let h = bounds.width * sinA + bounds.height * cosA
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        return CGRect(x: center.x - w / 2, y: center.y - h / 2, width: w, height: h)
-    }
-
-    private func textBoundingBox(_ annotation: TextAnnotation) -> CGRect {
-        let measured = AnnotationRenderer.measureText(annotation)
-        let padded = RenderConstants.paddedTextSize(measured)
-        let scaledSize = CGSize(
-            width: padded.width * annotation.scaleX,
-            height: padded.height * annotation.scaleY
-        )
-        let origin = annotation.position
-        guard annotation.rotation != 0 else {
-            return CGRect(origin: origin, size: scaledSize)
-        }
-        let rad = annotation.rotation * .pi / 180
-        let cosA = cos(rad), sinA = sin(rad)
-        let corners: [CGPoint] = [
-            CGPoint(x: 0, y: 0),
-            CGPoint(x: scaledSize.width, y: 0),
-            CGPoint(x: scaledSize.width, y: scaledSize.height),
-            CGPoint(x: 0, y: scaledSize.height),
-        ]
-        var minX = CGFloat.infinity, minY = CGFloat.infinity
-        var maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
-        for c in corners {
-            let x = origin.x + c.x * cosA - c.y * sinA
-            let y = origin.y + c.x * sinA + c.y * cosA
-            minX = min(minX, x); maxX = max(maxX, x)
-            minY = min(minY, y); maxY = max(maxY, y)
-        }
-        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
     // MARK: - Crop Overlay
@@ -389,7 +309,7 @@ struct AnnotationCanvas: View {
     }
 
     private var isCroppingDrag: Bool {
-        if case .croppingSelection = dragOperation { return true }
+        if case .croppingSelection = dragController.operation { return true }
         return false
     }
 
@@ -397,13 +317,8 @@ struct AnnotationCanvas: View {
         let imageBounds = CGRect(origin: .zero, size: imageSize)
 
         let overlayRect: CGRect? = {
-            if case .croppingSelection(let start, let end) = dragOperation {
-                return CGRect(
-                    x: min(start.x, end.x),
-                    y: min(start.y, end.y),
-                    width: abs(end.x - start.x),
-                    height: abs(end.y - start.y)
-                ).intersection(imageBounds)
+            if case .croppingSelection(let start, let end) = dragController.operation {
+                return CGRect(from: start, to: end).intersection(imageBounds)
             }
             return cropRect
         }()
@@ -435,10 +350,17 @@ struct AnnotationCanvas: View {
             .gesture(
                 DragGesture(minimumDistance: 3)
                     .onChanged { value in
-                        handleDragChanged(value)
+                        dragController.dragChanged(
+                            location: value.location,
+                            translation: value.translation,
+                            startLocation: value.startLocation,
+                            context: dragContext
+                        )
                     }
                     .onEnded { value in
-                        handleDragEnded(value)
+                        applyDragEnd(
+                            dragController.dragEnded(location: value.location, context: dragContext)
+                        )
                     }
             )
             .simultaneousGesture(
@@ -544,361 +466,20 @@ struct AnnotationCanvas: View {
 
     // MARK: - Drag Handling
 
-    private func handleDragChanged(_ value: DragGesture.Value) {
-        let point = value.location
-        let translation = value.translation
-
-        switch dragOperation {
+    /// Applies the view-state consequences of a finished drag — the document
+    /// mutations already happened inside the drag controller.
+    private func applyDragEnd(_ effect: CanvasDragController.EndEffect) {
+        switch effect {
         case .none:
-            guard let op = beginDrag(at: value.startLocation) else { return }
-            // Crop selection drags only touch `cropRect`, which isn't part of
-            // the undoable canvas state — the actual crop is recorded later,
-            // in AnnotationDocument.applyCrop.
-            if case .croppingSelection = op {} else {
-                document.recordSnapshot()
-            }
-            dragOperation = op
-            // Re-enter so the current translation is applied immediately,
-            // rather than waiting one frame for the next drag event.
-            handleDragChanged(value)
-
-        case .creatingArrow(let start, _):
-            dragOperation = .creatingArrow(start: start, end: point)
-
-        case .creatingRectangle(let start, _):
-            dragOperation = .creatingRectangle(start: start, end: point)
-
-        case .creatingPixelate(let start, _):
-            dragOperation = .creatingPixelate(start: start, end: point)
-
-        case .croppingSelection(let start, _):
-            dragOperation = .croppingSelection(start: start, end: point)
-
-        case .movingArrow(let id, let initialStart, let initialEnd, let mask):
-            annotations.updateArrow(id: id) { arrow in
-                if mask.contains(.start) { arrow.start = initialStart + translation }
-                if mask.contains(.end)   { arrow.end   = initialEnd + translation }
-            }
-
-        case .movingRectangle(let id, let initial):
-            annotations.updateRectangle(id: id) {
-                $0.rect = initial.offsetBy(dx: translation.width, dy: translation.height)
-            }
-
-        case .resizingRectangle(let id, let initial, let handle, let rotation):
-            // Project the canvas-space drag translation into the rect's local
-            // rotated frame so dragging the "right" handle moves along the
-            // rect's local x axis even when the rect is at a non-zero angle.
-            let rad = -rotation * .pi / 180
-            let cosA = cos(rad), sinA = sin(rad)
-            let localTrans = CGSize(
-                width:  translation.width * cosA - translation.height * sinA,
-                height: translation.width * sinA + translation.height * cosA
-            )
-            annotations.updateRectangle(id: id) {
-                $0.rect = resizedRotatedRect(
-                    initial: initial, rotation: rotation,
-                    handle: handle, localTranslation: localTrans
-                )
-            }
-
-        case .rotatingRectangle(let id, let initialRotation, let referenceAngle, let center):
-            annotations.updateRectangle(id: id) { rectangle in
-                let currentAngle = atan2(point.y - center.y, point.x - center.x) * 180 / .pi
-                let raw = initialRotation + (currentAngle - referenceAngle)
-                rectangle.rotation = snappedRotation(raw)
-                // `rect` is the unrotated bounds and the renderer pivots
-                // around its center, so leaving `rect` untouched keeps the
-                // rotation anchored at `center`.
-            }
-
-        case .movingText(let id, let initial):
-            annotations.updateText(id: id) { $0.position = initial + translation }
-
-        case .scalingText(let id, let axis, let initialScaleX, let initialScaleY,
-                         let center, let paddedWidth, let paddedHeight, let initialRef):
-            guard initialRef > 0.001 else { break }
-            annotations.updateText(id: id) { text in
-                let rad = text.rotation * .pi / 180
-                var newSX = initialScaleX
-                var newSY = initialScaleY
-
-                switch axis {
-                case .uniform:
-                    let dist = hypot(point.x - center.x, point.y - center.y)
-                    let factor = dist / initialRef
-                    newSX = initialScaleX * factor
-                    newSY = initialScaleY * factor
-
-                case .horizontal:
-                    let axisX = cos(rad), axisY = sin(rad)
-                    let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
-                    newSX = initialScaleX * abs(proj) / initialRef
-
-                case .vertical:
-                    let axisX = -sin(rad), axisY = cos(rad)
-                    let proj = (point.x - center.x) * axisX + (point.y - center.y) * axisY
-                    newSY = initialScaleY * abs(proj) / initialRef
-                }
-
-                newSX = max(0.2, newSX)
-                newSY = max(0.2, newSY)
-                text.scaleX = newSX
-                text.scaleY = newSY
-
-                // Reposition so center stays fixed
-                let newLocalCenter = CGPoint(
-                    x: paddedWidth * newSX / 2,
-                    y: paddedHeight * newSY / 2
-                )
-                text.position = CGPoint(
-                    x: center.x - (newLocalCenter.x * cos(rad) - newLocalCenter.y * sin(rad)),
-                    y: center.y - (newLocalCenter.x * sin(rad) + newLocalCenter.y * cos(rad))
-                )
-            }
-
-        case .marqueeSelecting(let start, _, let initialSelection, let additive):
-            let rect = marqueeRect(start: start, end: point)
-            let inside = annotationsIntersecting(rect)
-            selectedAnnotationIds = additive
-                ? initialSelection.union(inside)
-                : inside
-            dragOperation = .marqueeSelecting(
-                start: start, end: point,
-                initialSelection: initialSelection, additive: additive
-            )
-
-        case .movingMultiple(let initialSnapshots):
-            for (id, initial) in initialSnapshots {
-                annotations.update(id: id) { $0 = initial.translated(by: translation) }
-            }
-
-        case .rotatingText(let id, let initialRotation, let referenceAngle, let center,
-                           let paddedWidth, let paddedHeight, let scaleX, let scaleY):
-            annotations.updateText(id: id) { text in
-                let currentAngle = atan2(point.y - center.y, point.x - center.x) * 180 / .pi
-                let newRotation = snappedRotation(initialRotation + (currentAngle - referenceAngle))
-                text.rotation = newRotation
-
-                // The renderer pivots around `position` (the box's top-left),
-                // so rotating in place would whip the text around that corner.
-                // Recompute `position` each frame so the box's visual center
-                // stays pinned at `center` regardless of angle.
-                let rad = newRotation * .pi / 180
-                let halfW = paddedWidth * scaleX / 2
-                let halfH = paddedHeight * scaleY / 2
-                let cosA = cos(rad), sinA = sin(rad)
-                text.position = CGPoint(
-                    x: center.x - (halfW * cosA - halfH * sinA),
-                    y: center.y - (halfW * sinA + halfH * cosA)
-                )
-            }
-        }
-    }
-
-    /// Decides what kind of drag the user is starting at `startPoint`.
-    /// Mutates selection state as a side-effect, but only returns a `DragOperation`
-    /// when an actual drag should begin.
-    private func beginDrag(at startPoint: CGPoint) -> DragOperation? {
-        if cropMode {
-            return .croppingSelection(start: startPoint, end: startPoint)
-        }
-
-        if selectedTool == .arrow {
-            selectedAnnotationIds.removeAll()
-            return .creatingArrow(start: startPoint, end: startPoint)
-        }
-
-        if selectedTool == .rectangle {
-            selectedAnnotationIds.removeAll()
-            return .creatingRectangle(start: startPoint, end: startPoint)
-        }
-
-        if selectedTool == .pixelate {
-            selectedAnnotationIds.removeAll()
-            return .creatingPixelate(start: startPoint, end: startPoint)
-        }
-
-        let isShift = NSEvent.modifierFlags.contains(.shift)
-
-        // Empty-space drag = marquee selection. Shift makes it additive (extends
-        // the existing selection); plain marquee replaces. Holding Option while
-        // dragging from empty space takes the drag-out path instead, but that's
-        // routed through DragOutHandle and never reaches this method.
-        guard let hit = hitTest(at: startPoint) else {
-            let initial = isShift ? selectedAnnotationIds : []
-            if !isShift {
-                selectedAnnotationIds.removeAll()
-            }
-            return .marqueeSelecting(
-                start: startPoint, end: startPoint,
-                initialSelection: initial, additive: isShift
-            )
-        }
-
-        // Shift-drag on an annotation: bail. Shift is reserved for the click-
-        // toggle behavior, and multi-selection drag of one item with shift held
-        // would be ambiguous (toggle? augment? translate?). Rotation handles
-        // are exempt — shift-drag from the rotate handle snaps to 45°.
-        if isShift && !hit.isRotateHandle {
-            return nil
-        }
-
-        // Body-drag on any member of a multi-selection moves the whole group
-        // together. Handle drags don't reach this branch — handles aren't
-        // drawn or hit-tested while multi-selected — so this is purely the
-        // translate-as-a-unit case.
-        let hitId = hit.id
-        if hit.isBody, selectedAnnotationIds.contains(hitId), selectedAnnotationIds.count > 1 {
-            return beginMovingMultiple()
-        }
-
-        switch hit {
-        case .arrow(let id, let zone):
-            selectedAnnotationIds = [id]
-            guard let arrow = annotations.first(where: { $0.id == id })?.arrow else { return nil }
-            let mask: ArrowEndpointMask
-            switch zone {
-            case .startEndpoint: mask = .start
-            case .endEndpoint:   mask = .end
-            case .body:          mask = .both
-            default:             return nil
-            }
-            return .movingArrow(
-                id: id, initialStart: arrow.start, initialEnd: arrow.end, mask: mask
-            )
-
-        case .text(let id, let zone):
-            selectedAnnotationIds = [id]
-            guard let annotation = annotations.first(where: { $0.id == id })?.text else { return nil }
-            switch zone {
-            case .handle(let handlePos):
-                return beginTextScaling(for: annotation, handle: handlePos)
-            case .rotateHandle:
-                return beginRotation(for: annotation, from: startPoint)
-            case .body:
-                return .movingText(id: id, initialPosition: annotation.position)
-            default:
-                return nil
-            }
-
-        case .rectangle(let id, let zone):
-            selectedAnnotationIds = [id]
-            guard let rectangle = annotations.first(where: { $0.id == id })?.rectangle else { return nil }
-            switch zone {
-            case .body:
-                return .movingRectangle(id: id, initialRect: rectangle.rect)
-            case .handle(let handlePos):
-                return .resizingRectangle(
-                    id: id,
-                    initialRect: rectangle.rect.standardized,
-                    handle: handlePos,
-                    rotation: rectangle.rotation
-                )
-            case .rotateHandle:
-                return beginRectangleRotation(for: rectangle, from: startPoint)
-            default:
-                return nil
-            }
-
-        }
-    }
-
-    /// Snapshots every selected annotation so a drag can translate them all
-    /// from a stable base.
-    private func beginMovingMultiple() -> DragOperation {
-        let ids = selectedAnnotationIds
-        var initial: [UUID: Annotation] = [:]
-        for annotation in annotations where ids.contains(annotation.id) {
-            initial[annotation.id] = annotation
-        }
-        return .movingMultiple(initial: initial)
-    }
-
-    /// Builds a `rotatingRectangle` drag operation anchored at the rect's
-    /// visual center.
-    private func beginRectangleRotation(
-        for rectangle: RectangleAnnotation,
-        from startPoint: CGPoint
-    ) -> DragOperation {
-        let bounds = rectangle.rect.standardized
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        let referenceAngle = atan2(
-            startPoint.y - center.y,
-            startPoint.x - center.x
-        ) * 180 / .pi
-        return .rotatingRectangle(
-            id: rectangle.id,
-            initialRotation: rectangle.rotation,
-            referenceAngle: referenceAngle,
-            center: center
-        )
-    }
-
-    private func handleDragEnded(_ value: DragGesture.Value) {
-        if case .creatingArrow(let start, _) = dragOperation {
-            let end = value.location
-            let arrow = ArrowAnnotation(start: start, end: end, color: selectedColor)
-            annotations.append(.arrow(arrow))
-            selectedAnnotationIds = [arrow.id]
+            break
+        case .toolFinished:
             selectedTool = nil
-        } else if case .creatingRectangle(let start, _) = dragOperation {
-            let end = value.location
-            let rect = CGRect(
-                x: min(start.x, end.x),
-                y: min(start.y, end.y),
-                width: abs(end.x - start.x),
-                height: abs(end.y - start.y)
-            )
-            if rect.width > 1, rect.height > 1 {
-                let rectangle = RectangleAnnotation(
-                    rect: rect,
-                    color: selectedColor,
-                    style: rectangleFillStyle
-                )
-                annotations.append(.rectangle(rectangle))
-                selectedAnnotationIds = [rectangle.id]
-            }
-            selectedTool = nil
-        } else if case .creatingPixelate(let start, _) = dragOperation {
-            let end = value.location
-            let rect = CGRect(
-                x: min(start.x, end.x),
-                y: min(start.y, end.y),
-                width: abs(end.x - start.x),
-                height: abs(end.y - start.y)
-            )
-            if rect.width > 1, rect.height > 1 {
-                document.applyPixelation(rect: rect)
-            } else {
-                // No region drawn — drop the snapshot taken at drag start so
-                // an accidental click on the pixelate tool doesn't burn an
-                // undo slot.
-                document.discardLastSnapshot()
-            }
-            selectedTool = nil
-        } else if case .resizingRectangle(let id, _, _, _) = dragOperation {
-            // Normalize at the end of a resize so flipped rects are stored
-            // with positive width/height. Hit testing already standardizes,
-            // but keeping the stored value tidy avoids surprises elsewhere.
-            annotations.updateRectangle(id: id) { $0.rect = $0.rect.standardized }
-        } else if case .croppingSelection(let start, _) = dragOperation {
-            let end = value.location
-            let imageBounds = CGRect(origin: .zero, size: imageSize)
-            let rect = CGRect(
-                x: min(start.x, end.x),
-                y: min(start.y, end.y),
-                width: abs(end.x - start.x),
-                height: abs(end.y - start.y)
-            ).intersection(imageBounds)
-            if rect.width > 1 && rect.height > 1 {
-                cropRect = rect
+        case .cropSelected(let rect):
+            cropRect = rect
+            if rect != nil {
                 onCropApply()
-            } else {
-                cropRect = nil
             }
         }
-        dragOperation = .none
     }
 
     // MARK: - Tap Handling
@@ -1002,81 +583,6 @@ struct AnnotationCanvas: View {
         focusedTextId = nil
     }
 
-    /// If shift is held, snaps to the nearest 45° increment (0/45/90/...) so
-    /// users can lock annotations to canvas-aligned angles. Otherwise returns
-    /// `raw` unchanged.
-    private func snappedRotation(_ raw: Double) -> Double {
-        guard NSEvent.modifierFlags.contains(.shift) else { return raw }
-        return (raw / 45).rounded() * 45
-    }
-
-    /// Builds a `rotatingText` drag operation anchored at the annotation's center.
-    private func beginRotation(
-        for annotation: TextAnnotation,
-        from startPoint: CGPoint
-    ) -> DragOperation {
-        let padded = RenderConstants.paddedTextSize(AnnotationRenderer.measureText(annotation))
-        let center = textCenter(for: annotation)
-        let referenceAngle = atan2(
-            startPoint.y - center.y,
-            startPoint.x - center.x
-        ) * 180 / .pi
-        return .rotatingText(
-            id: annotation.id,
-            initialRotation: annotation.rotation,
-            referenceAngle: referenceAngle,
-            center: center,
-            paddedWidth: padded.width,
-            paddedHeight: padded.height,
-            scaleX: annotation.scaleX,
-            scaleY: annotation.scaleY
-        )
-    }
-
-    /// Builds a `scalingText` drag operation for the given handle.
-    /// Decides scaling axis (uniform/horizontal/vertical) and the reference distance
-    /// against which subsequent drag distances are normalised.
-    private func beginTextScaling(
-        for annotation: TextAnnotation,
-        handle handlePos: HandlePosition
-    ) -> DragOperation {
-        let measured = AnnotationRenderer.measureText(annotation)
-        let padded = RenderConstants.paddedTextSize(measured)
-        let scaledSize = CGSize(
-            width: padded.width * annotation.scaleX,
-            height: padded.height * annotation.scaleY
-        )
-        let center = textCenter(for: annotation)
-
-        let axis: ScaleAxis
-        let initialRef: CGFloat
-        if handlePos.isCorner {
-            axis = .uniform
-            let handleLocal = handlePos.localPoint(scaledSize: scaledSize)
-            let handleCanvas = AnnotationRenderer.localToCanvas(
-                handleLocal, origin: annotation.position, angle: annotation.rotation
-            )
-            initialRef = hypot(handleCanvas.x - center.x, handleCanvas.y - center.y)
-        } else if handlePos == .left || handlePos == .right {
-            axis = .horizontal
-            initialRef = padded.width * annotation.scaleX / 2
-        } else {
-            axis = .vertical
-            initialRef = padded.height * annotation.scaleY / 2
-        }
-
-        return .scalingText(
-            id: annotation.id,
-            axis: axis,
-            initialScaleX: annotation.scaleX,
-            initialScaleY: annotation.scaleY,
-            center: center,
-            paddedWidth: padded.width,
-            paddedHeight: padded.height,
-            initialRef: initialRef
-        )
-    }
-
     /// ⌘+scroll zoom, matching the convention in Preview/Safari/Xcode. On a
     /// trackpad this is the familiar "hold ⌘ and two-finger drag" gesture.
     /// Returning `nil` swallows the event so the underlying `ScrollView`
@@ -1141,74 +647,6 @@ struct AnnotationCanvas: View {
         )
         scrollPosition.scrollTo(point: newOffset)
     }
-
-    /// Computes the new rect produced by dragging a handle on a rotated
-    /// rectangle. `localTranslation` is the canvas-space drag delta already
-    /// rotated into the rect's local frame, so handle math can be done as if
-    /// the rect were axis-aligned. The result preserves the anchor (the
-    /// edge/corner opposite to the dragged handle) at its canvas position.
-    /// May be non-standardized while dragging past the opposite edge —
-    /// callers standardize at the end of the drag.
-    private func resizedRotatedRect(
-        initial: CGRect,
-        rotation: Double,
-        handle: HandlePosition,
-        localTranslation: CGSize
-    ) -> CGRect {
-        // Work in a local frame centred on the initial rect's center, where
-        // the unrotated rect spans (-w/2 ... w/2, -h/2 ... h/2).
-        let halfW = initial.width / 2
-        let halfH = initial.height / 2
-        var lMinX = -halfW, lMaxX = halfW
-        var lMinY = -halfH, lMaxY = halfH
-
-        let dx = localTranslation.width
-        let dy = localTranslation.height
-        switch handle {
-        case .topLeft:     lMinX += dx; lMinY += dy
-        case .top:                      lMinY += dy
-        case .topRight:    lMaxX += dx; lMinY += dy
-        case .left:        lMinX += dx
-        case .right:       lMaxX += dx
-        case .bottomLeft:  lMinX += dx; lMaxY += dy
-        case .bottom:                   lMaxY += dy
-        case .bottomRight: lMaxX += dx; lMaxY += dy
-        }
-
-        let newWidth = lMaxX - lMinX
-        let newHeight = lMaxY - lMinY
-        // Local-frame center of the new rect, relative to the initial center.
-        let localCenter = CGPoint(x: (lMinX + lMaxX) / 2, y: (lMinY + lMaxY) / 2)
-
-        // Rotate the local center back into canvas space and add to the
-        // initial center to find where the new rect's center should sit.
-        let rad = rotation * .pi / 180
-        let cosA = cos(rad), sinA = sin(rad)
-        let initialCenter = CGPoint(x: initial.midX, y: initial.midY)
-        let newCenter = CGPoint(
-            x: initialCenter.x + localCenter.x * cosA - localCenter.y * sinA,
-            y: initialCenter.y + localCenter.x * sinA + localCenter.y * cosA
-        )
-
-        return CGRect(
-            x: newCenter.x - newWidth / 2,
-            y: newCenter.y - newHeight / 2,
-            width: newWidth,
-            height: newHeight
-        )
-    }
-
-    /// Returns the center of a text annotation's scaled bounding box in canvas space.
-    private func textCenter(for annotation: TextAnnotation) -> CGPoint {
-        let padded = RenderConstants.paddedTextSize(AnnotationRenderer.measureText(annotation))
-        let localCenter = CGPoint(
-            x: padded.width * annotation.scaleX / 2,
-            y: padded.height * annotation.scaleY / 2
-        )
-        return AnnotationRenderer.localToCanvas(
-            localCenter, origin: annotation.position, angle: annotation.rotation
-        )
-    }
 }
 
 // MARK: - Supporting Types
@@ -1216,83 +654,4 @@ struct AnnotationCanvas: View {
 private struct EditingState {
     let id: UUID
     let originalText: String
-}
-
-/// Which axis a text scaling operation affects.
-private enum ScaleAxis {
-    case uniform    // corner handles — both axes
-    case horizontal // left/right handles
-    case vertical   // top/bottom handles
-}
-
-/// Which endpoints of an arrow follow a translation drag.
-private struct ArrowEndpointMask: OptionSet {
-    let rawValue: Int
-    static let start = ArrowEndpointMask(rawValue: 1 << 0)
-    static let end   = ArrowEndpointMask(rawValue: 1 << 1)
-    static let both: ArrowEndpointMask = [.start, .end]
-}
-
-private enum DragOperation {
-    case none
-    case creatingArrow(start: CGPoint, end: CGPoint)
-    case creatingRectangle(start: CGPoint, end: CGPoint)
-    case creatingPixelate(start: CGPoint, end: CGPoint)
-    case croppingSelection(start: CGPoint, end: CGPoint)
-    case movingArrow(id: UUID, initialStart: CGPoint, initialEnd: CGPoint, mask: ArrowEndpointMask)
-    case movingRectangle(id: UUID, initialRect: CGRect)
-    case resizingRectangle(
-        id: UUID,
-        initialRect: CGRect,
-        handle: HandlePosition,
-        rotation: Double
-    )
-    case rotatingRectangle(
-        id: UUID,
-        initialRotation: Double,
-        referenceAngle: Double,
-        center: CGPoint
-    )
-    case movingText(id: UUID, initialPosition: CGPoint)
-    case scalingText(
-        id: UUID,
-        axis: ScaleAxis,
-        initialScaleX: CGFloat,
-        initialScaleY: CGFloat,
-        center: CGPoint,
-        paddedWidth: CGFloat,
-        paddedHeight: CGFloat,
-        initialRef: CGFloat
-    )
-    case rotatingText(
-        id: UUID,
-        initialRotation: Double,
-        referenceAngle: Double,
-        center: CGPoint,
-        paddedWidth: CGFloat,
-        paddedHeight: CGFloat,
-        scaleX: CGFloat,
-        scaleY: CGFloat
-    )
-    /// Translates several annotations together — the body-drag flavour of a
-    /// multi-selection. Each entry stores the annotation as it was at drag
-    /// start so the translation can be applied from a stable base.
-    case movingMultiple(initial: [UUID: Annotation])
-    /// Drag-rectangle (marquee) for selecting annotations en masse. Live-
-    /// updates `selectedAnnotationIds` as the user drags. `initialSelection`
-    /// is the set carried over from before the drag — non-empty only when
-    /// `additive` is true (Shift held), so plain marquees replace selection.
-    case marqueeSelecting(
-        start: CGPoint,
-        end: CGPoint,
-        initialSelection: Set<UUID>,
-        additive: Bool
-    )
-}
-
-// MARK: - Helpers
-
-/// Translates a point by a SwiftUI gesture translation.
-private func + (point: CGPoint, translation: CGSize) -> CGPoint {
-    CGPoint(x: point.x + translation.width, y: point.y + translation.height)
 }
