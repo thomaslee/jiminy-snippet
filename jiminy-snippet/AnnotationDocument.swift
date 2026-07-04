@@ -192,12 +192,12 @@ final class AnnotationDocument {
 
     /// Rotates the image by 90°, repositioning annotations to match.
     func rotateImage(clockwise: Bool) {
-        guard let image else { return }
+        guard let image, let rotated = image.rotated(clockwise: clockwise) else { return }
         recordSnapshot()
         let w = image.size.width
         let h = image.size.height
 
-        self.image = image.rotated(clockwise: clockwise)
+        self.image = rotated
         annotations = annotations.map {
             $0.rotated90(clockwise: clockwise, imageWidth: w, imageHeight: h)
         }

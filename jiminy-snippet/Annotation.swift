@@ -335,23 +335,27 @@ extension NSImage {
         return NSImage(cgImage: croppedCG, size: newPointSize)
     }
 
-    /// Returns a new image scaled to `newSize` (in points). Uses the same
-    /// drawing approach as `rotated(clockwise:)` so it works reliably with
-    /// any source bitmap representation.
+    /// Returns a new image scaled to `newSize` (in points), preserving the
+    /// source bitmap's pixel density so Retina images stay crisp.
     func resized(to newSize: NSSize) -> NSImage? {
         guard newSize.width >= 1, newSize.height >= 1 else { return nil }
-        let originalSize = size
-        guard originalSize.width > 0, originalSize.height > 0 else { return nil }
+        let pointSize = size
+        guard pointSize.width > 0, pointSize.height > 0,
+              let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { return nil }
 
-        return NSImage(size: newSize, flipped: false) { _ in
-            self.draw(
-                in: NSRect(origin: .zero, size: newSize),
-                from: .zero,
-                operation: .copy,
-                fraction: 1.0
-            )
-            return true
-        }
+        let sx = CGFloat(cgImage.width) / pointSize.width
+        let sy = CGFloat(cgImage.height) / pointSize.height
+        let pixelWidth = max(1, Int((newSize.width * sx).rounded()))
+        let pixelHeight = max(1, Int((newSize.height * sy).rounded()))
+
+        guard let context = Self.bitmapContext(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        else { return nil }
+        context.interpolationQuality = .high
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
+
+        guard let output = context.makeImage() else { return nil }
+        return NSImage(cgImage: output, size: newSize)
     }
 
     /// Returns a copy of this image with `CIPixellate` applied, producing
@@ -415,15 +419,8 @@ extension NSImage {
 
         guard pixelRect.width >= 1, pixelRect.height >= 1 else { return self }
 
-        guard let context = CGContext(
-            data: nil,
-            width: Int(pixelW),
-            height: Int(pixelH),
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
+        guard let context = Self.bitmapContext(pixelWidth: Int(pixelW), pixelHeight: Int(pixelH))
+        else { return nil }
 
         let fullPixelRect = CGRect(x: 0, y: 0, width: pixelW, height: pixelH)
         context.draw(originalCG, in: fullPixelRect)
@@ -440,24 +437,49 @@ extension NSImage {
         return NSImage(cgImage: output, size: pointSize)
     }
 
-    /// Returns a new image rotated by 90° with swapped dimensions.
-    func rotated(clockwise: Bool) -> NSImage {
-        let originalSize = size
-        let newSize = NSSize(width: originalSize.height, height: originalSize.width)
-        return NSImage(size: newSize, flipped: false) { _ in
-            let transform = NSAffineTransform()
-            transform.translateX(by: newSize.width / 2, yBy: newSize.height / 2)
-            transform.rotate(byDegrees: clockwise ? -90 : 90)
-            transform.translateX(by: -originalSize.width / 2, yBy: -originalSize.height / 2)
-            transform.concat()
-            self.draw(
-                in: NSRect(origin: .zero, size: originalSize),
-                from: .zero,
-                operation: .copy,
-                fraction: 1.0
-            )
-            return true
-        }
+    /// Returns a new image rotated by 90° with swapped dimensions, preserving
+    /// the source bitmap's pixel resolution.
+    func rotated(clockwise: Bool) -> NSImage? {
+        let pointSize = size
+        guard pointSize.width > 0, pointSize.height > 0,
+              let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { return nil }
+
+        let pixelWidth = cgImage.height
+        let pixelHeight = cgImage.width
+
+        guard let context = Self.bitmapContext(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        else { return nil }
+        context.translateBy(x: CGFloat(pixelWidth) / 2, y: CGFloat(pixelHeight) / 2)
+        context.rotate(by: (clockwise ? -1 : 1) * .pi / 2)
+        context.translateBy(x: -CGFloat(cgImage.width) / 2, y: -CGFloat(cgImage.height) / 2)
+        context.draw(
+            cgImage,
+            in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height)
+        )
+
+        guard let output = context.makeImage() else { return nil }
+        return NSImage(
+            cgImage: output,
+            size: NSSize(width: pointSize.height, height: pointSize.width)
+        )
+    }
+
+    /// An RGBA bitmap context for rasterizing image edits offscreen. Editing
+    /// operations draw into one of these and wrap the result in a fresh
+    /// `NSImage` so edited images carry no reference to their predecessors —
+    /// unlike `NSImage` drawing handlers, which retain their source image and
+    /// re-rasterize it on every draw.
+    private static func bitmapContext(pixelWidth: Int, pixelHeight: Int) -> CGContext? {
+        CGContext(
+            data: nil,
+            width: pixelWidth,
+            height: pixelHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )
     }
 }
 
