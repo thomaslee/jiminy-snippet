@@ -1,5 +1,5 @@
 //
-//  ScreenshotManager.swift
+//  CaptureService.swift
 //  jiminy-snippet
 //
 //  Created by Tom on 4/2/26.
@@ -11,10 +11,10 @@ import ScreenCaptureKit
 import SwiftUI
 
 /// A capture action requested from outside ContentView (e.g. the menu bar
-/// item). ContentView watches `ScreenshotManager.pendingCaptureRequest` and
-/// dispatches these through its existing capture pipeline so the unsaved-
-/// changes confirmation, annotation clearing, and capture itself all stay in
-/// one place.
+/// item). ContentView watches `CaptureService.pendingCaptureRequest` and
+/// dispatches these through its own capture pipeline so the unsaved-changes
+/// confirmation and annotation clearing stay in one place regardless of
+/// where the request originated.
 enum CaptureRequest: Equatable {
     case fullscreen
     case region
@@ -22,39 +22,39 @@ enum CaptureRequest: Equatable {
     case fromClipboard
 }
 
+/// A capture attempt that failed for a reason worth telling the user about.
+/// User cancellations (Escape during region selection or the countdown) are
+/// not errors — capture methods return nil for those instead.
+struct CaptureError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
+/// Drives every way of acquiring a screenshot: fullscreen, region selection,
+/// and timed region capture with its countdown UI. Owns the transient windows
+/// those flows need (selection overlay, region outline, countdown panel) and
+/// the hide-the-app-while-capturing dance.
+///
+/// Capture methods are async: they return the captured image, return nil when
+/// the user cancels, and throw `CaptureError` when the capture itself fails.
 @Observable
 @MainActor
-final class ScreenshotManager {
-    /// A freshly-captured image awaiting ContentView's discard-confirmation
-    /// pass. Capture flows write here on success instead of mutating the
-    /// document directly so the user is only ever prompted to discard edits
-    /// *after* a capture has actually been acquired — pressing Escape during
-    /// region selection or the timed countdown leaves this nil and the
-    /// existing edits untouched.
-    var incomingCapture: NSImage?
-
+final class CaptureService {
     /// Out-of-band capture request, set by the menu bar item and consumed by
-    /// ContentView. Using a state field here (instead of calling capture
-    /// methods directly from the menu bar) lets ContentView apply its
-    /// existing unsaved-changes confirmation and annotation-clearing logic
-    /// uniformly across every capture code path.
+    /// ContentView. This stays an observable field (rather than an async
+    /// call) because the request has to survive the main window being opened:
+    /// the menu bar sets it before the window exists, and ContentView
+    /// consumes it on first appearance.
     var pendingCaptureRequest: CaptureRequest?
-
-    /// Localized failure message from the most recent capture attempt. Set
-    /// from the ScreenCaptureKit catch sites and observed by ContentView,
-    /// which surfaces it as a toast (or, when the editor window isn't open,
-    /// as an `NSAlert`). User-driven cancellations (Escape during region
-    /// selection or the timed countdown) leave this nil — they aren't errors.
-    var captureError: String?
 
     // MARK: - Timed capture state
     //
-    // These are implementation details of `captureFullscreenAfterDelay` — no
-    // view observes them, so exclude them from observation tracking.
+    // Implementation details of `captureRegionAfterDelay` — no view observes
+    // them, so exclude them from observation tracking.
 
     @ObservationIgnored private var countdownWindow: NSPanel?
     @ObservationIgnored private var countdownState: CountdownState?
-    @ObservationIgnored private var countdownTask: Task<Void, Never>?
+    @ObservationIgnored private var countdownTask: Task<Bool, Never>?
     /// Click-through overlay that outlines the pre-selected region while the
     /// countdown is running, so the user can see what's about to be captured.
     @ObservationIgnored private var regionOutlineWindow: NSWindow?
@@ -62,111 +62,111 @@ final class ScreenshotManager {
     /// the user's setup. Restored on cancel or after the capture completes.
     @ObservationIgnored private var timedCaptureHiddenWindows: [NSWindow] = []
 
-    /// Presents a modal warning when there are unsaved changes and returns
-    /// whether the caller should proceed with the destructive action.
-    static func confirmDiscardUnsavedChanges(
-        messageText: String,
-        informativeText: String,
-        proceedButtonTitle: String
-    ) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = messageText
-        alert.informativeText = informativeText
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: proceedButtonTitle)
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+    // MARK: - Capture Flows
+
+    /// Captures the whole main display. Hides the app's own windows first so
+    /// they don't appear in the shot.
+    func captureFullscreen() async throws -> NSImage? {
+        let hidden = hideAppWindows()
+        defer { restoreWindows(hidden) }
+
+        // Give the windows a beat to leave the compositor before capturing.
+        try? await Task.sleep(for: .milliseconds(500))
+        return try await performFullscreenCapture()
     }
 
-    func captureFullscreen() {
-        let visibleWindows = NSApplication.shared.windows.filter { $0.isVisible }
-        for window in visibleWindows {
-            window.setIsVisible(false)
-        }
+    /// Shows the region-selection overlay and captures the selected region.
+    /// Returns nil when the user cancels the selection.
+    func captureRegion() async throws -> NSImage? {
+        let hidden = hideAppWindows()
+        defer { restoreWindows(hidden) }
 
-        Task {
-            try? await Task.sleep(for: .milliseconds(500))
-            await performFullscreenCapture()
-            restoreWindows(visibleWindows)
-        }
-    }
-
-    /// Actual capture step, shared by `captureFullscreen` and the timed
-    /// variant. Assumes the caller has already hidden the app's own windows
-    /// and is responsible for restoring them afterwards.
-    private func performFullscreenCapture() async {
-        do {
-            let content = try await SCShareableContent.excludingDesktopWindows(
-                false, onScreenWindowsOnly: true
-            )
-            guard let display = content.displays.first else {
-                reportCaptureError("No display available to capture.")
-                return
-            }
-
-            let filter = SCContentFilter(display: display, excludingWindows: [])
-            let config = SCStreamConfiguration()
-            config.width = display.width * 2
-            config.height = display.height * 2
-            config.showsCursor = false
-
-            let cgImage = try await SCScreenshotManager.captureImage(
-                contentFilter: filter,
-                configuration: config
-            )
-
-            self.incomingCapture = NSImage(
-                cgImage: cgImage,
-                size: NSSize(width: display.width, height: display.height)
-            )
-        } catch {
-            reportCaptureError(error.localizedDescription)
-        }
+        guard let screen = NSScreen.main else { return nil }
+        guard let selectedRect = await selectRegion(on: screen) else { return nil }
+        return try await performRegionCapture(screen: screen, selectedRect: selectedRect)
     }
 
     /// Shows the region-selection overlay, waits for the user to drag out a
     /// selection, then runs a countdown (with a live outline of the region and
     /// a per-second beep) before capturing. Starting a new timed capture
-    /// cancels any in-flight one.
-    func captureRegionAfterDelay(seconds: Int) {
+    /// cancels any in-flight one. Returns nil when the user cancels either
+    /// the selection or the countdown.
+    func captureRegionAfterDelay(seconds: Int) async throws -> NSImage? {
         cancelTimedCapture()
 
         // Hide app windows so they're not in the user's way while they're
         // selecting a region or setting up the scene during the countdown.
-        let toHide = NSApplication.shared.windows.filter { $0.isVisible }
-        for window in toHide {
-            window.setIsVisible(false)
-        }
-        timedCaptureHiddenWindows = toHide
+        // Tracked in a property (not locally) so `cancelTimedCapture` can
+        // restore them from the countdown's Escape handler.
+        timedCaptureHiddenWindows = hideAppWindows()
 
         guard let screen = NSScreen.main else {
             cancelTimedCapture()
-            return
+            return nil
+        }
+        guard let selectedRect = await selectRegion(on: screen) else {
+            // User cancelled the region selection — unwind everything.
+            cancelTimedCapture()
+            return nil
+        }
+        guard await runCountdown(seconds: seconds, screen: screen, selectedRect: selectedRect) else {
+            // Cancelled mid-countdown — cancelTimedCapture already unwound.
+            return nil
         }
 
-        let selectionWindow = RegionSelectionWindow(screen: screen) { [weak self] selectedRect in
-            guard let self else { return }
-            guard let selectedRect else {
-                // User cancelled the region selection — unwind everything.
-                self.cancelTimedCapture()
-                return
-            }
-            self.beginRegionCountdown(
-                screen: screen,
-                selectedRect: selectedRect,
-                seconds: seconds
-            )
-        }
-        selectionWindow.makeKeyAndOrderFront(nil)
+        hideCountdownWindow()
+        hideRegionOutlineWindow()
+        countdownTask = nil
+
+        let hiddenWindows = timedCaptureHiddenWindows
+        timedCaptureHiddenWindows = []
+        defer { restoreWindows(hiddenWindows) }
+
+        // Give the compositor a beat to drop the outline + countdown panel
+        // before snapshotting, otherwise they can leak into the capture on
+        // slower machines.
+        try? await Task.sleep(for: .milliseconds(200))
+        return try await performRegionCapture(screen: screen, selectedRect: selectedRect)
     }
 
-    /// After the user has picked a region, shows the outline + countdown panel
-    /// and spins up the ticking task. Called exactly once per timed capture.
-    private func beginRegionCountdown(
+    /// Cancels an in-flight timed capture, restoring any windows that were
+    /// hidden when the flow started. Safe to call when no timed capture is
+    /// active.
+    func cancelTimedCapture() {
+        countdownTask?.cancel()
+        countdownTask = nil
+        hideCountdownWindow()
+        hideRegionOutlineWindow()
+        if !timedCaptureHiddenWindows.isEmpty {
+            let windowsToRestore = timedCaptureHiddenWindows
+            timedCaptureHiddenWindows = []
+            restoreWindows(windowsToRestore)
+        }
+    }
+
+    // MARK: - Region Selection
+
+    /// Presents the fullscreen selection overlay and suspends until the user
+    /// drags out a region, or returns nil when they cancel with Escape.
+    private func selectRegion(on screen: NSScreen) async -> CGRect? {
+        await withCheckedContinuation { continuation in
+            let selectionWindow = RegionSelectionWindow(screen: screen) { selectedRect in
+                continuation.resume(returning: selectedRect)
+            }
+            selectionWindow.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    // MARK: - Countdown
+
+    /// Shows the region outline + countdown panel and ticks down once per
+    /// second. Returns true when the countdown ran to completion, false when
+    /// it was cancelled via `cancelTimedCapture`.
+    private func runCountdown(
+        seconds: Int,
         screen: NSScreen,
-        selectedRect: CGRect,
-        seconds: Int
-    ) {
+        selectedRect: CGRect
+    ) async -> Bool {
         let outline = RegionOutlineWindow(screen: screen, rect: selectedRect)
         outline.orderFrontRegardless()
         regionOutlineWindow = outline
@@ -191,8 +191,7 @@ final class ScreenshotManager {
         NSApplication.shared.activate()
         panel.makeKey()
 
-        countdownTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+        let task = Task { @MainActor in
             var remaining = seconds
             while remaining > 0 {
                 state.seconds = remaining
@@ -202,52 +201,14 @@ final class ScreenshotManager {
                 do {
                     try await Task.sleep(for: .seconds(1))
                 } catch {
-                    return
+                    return false
                 }
                 remaining -= 1
             }
-            await self.performTimedRegionCapture(
-                screen: screen,
-                selectedRect: selectedRect
-            )
+            return true
         }
-    }
-
-    /// Called when the countdown hits zero. Tears down the outline + countdown
-    /// panel, briefly waits for them to clear the compositor, captures, then
-    /// restores whatever windows the timed-capture flow originally hid.
-    private func performTimedRegionCapture(
-        screen: NSScreen,
-        selectedRect: CGRect
-    ) async {
-        hideCountdownWindow()
-        hideRegionOutlineWindow()
-        countdownTask = nil
-
-        let hiddenWindows = timedCaptureHiddenWindows
-        timedCaptureHiddenWindows = []
-
-        // Give the compositor a beat to drop the outline + countdown panel
-        // before snapshotting, otherwise they can leak into the capture on
-        // slower machines.
-        try? await Task.sleep(for: .milliseconds(200))
-        await performRegionCapture(screen: screen, selectedRect: selectedRect)
-        restoreWindows(hiddenWindows)
-    }
-
-    /// Cancels an in-flight timed capture, restoring any windows that were
-    /// hidden when the flow started. Safe to call when no timed capture is
-    /// active.
-    func cancelTimedCapture() {
-        countdownTask?.cancel()
-        countdownTask = nil
-        hideCountdownWindow()
-        hideRegionOutlineWindow()
-        if !timedCaptureHiddenWindows.isEmpty {
-            let windowsToRestore = timedCaptureHiddenWindows
-            timedCaptureHiddenWindows = []
-            restoreWindows(windowsToRestore)
-        }
+        countdownTask = task
+        return await task.value
     }
 
     private func hideCountdownWindow() {
@@ -339,35 +300,43 @@ final class ScreenshotManager {
         return CGPoint(x: max(minX, min(maxX, rawX)), y: y)
     }
 
-    func captureRegion() {
-        let visibleWindows = NSApplication.shared.windows.filter { $0.isVisible }
-        for window in visibleWindows {
-            window.setIsVisible(false)
-        }
+    // MARK: - Capture Steps
 
-        guard let screen = NSScreen.main else {
-            restoreWindows(visibleWindows)
-            return
-        }
-
-        let selectionWindow = RegionSelectionWindow(screen: screen) { [weak self] selectedRect in
-            guard let self else { return }
-            guard let selectedRect else {
-                self.restoreWindows(visibleWindows)
-                return
+    private func performFullscreenCapture() async throws -> NSImage {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false, onScreenWindowsOnly: true
+            )
+            guard let display = content.displays.first else {
+                throw CaptureError(message: "No display available to capture.")
             }
-            Task {
-                await self.performRegionCapture(screen: screen, selectedRect: selectedRect)
-                self.restoreWindows(visibleWindows)
-            }
-        }
 
-        selectionWindow.makeKeyAndOrderFront(nil)
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let config = SCStreamConfiguration()
+            config.width = display.width * 2
+            config.height = display.height * 2
+            config.showsCursor = false
+
+            let cgImage = try await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: config
+            )
+
+            return NSImage(
+                cgImage: cgImage,
+                size: NSSize(width: display.width, height: display.height)
+            )
+        } catch let error as CaptureError {
+            throw error
+        } catch {
+            throw CaptureError(message: error.localizedDescription)
+        }
     }
 
-    /// Actual region-capture step, shared by `captureRegion` and the timed
-    /// variant. The caller is responsible for hiding/restoring app windows.
-    private func performRegionCapture(screen: NSScreen, selectedRect: CGRect) async {
+    private func performRegionCapture(
+        screen: NSScreen,
+        selectedRect: CGRect
+    ) async throws -> NSImage {
         // Convert from view coordinates (origin bottom-left) to display points.
         // selectedRect is in the screen's coordinate space (bottom-left origin).
         // SCStreamConfiguration.sourceRect uses top-left origin in points.
@@ -385,8 +354,7 @@ final class ScreenshotManager {
                 false, onScreenWindowsOnly: true
             )
             guard let display = content.displays.first else {
-                reportCaptureError("No display available to capture.")
-                return
+                throw CaptureError(message: "No display available to capture.")
             }
 
             let filter = SCContentFilter(display: display, excludingWindows: [])
@@ -401,21 +369,27 @@ final class ScreenshotManager {
                 configuration: config
             )
 
-            self.incomingCapture = NSImage(
+            return NSImage(
                 cgImage: cgImage,
                 size: NSSize(width: selectedRect.width, height: selectedRect.height)
             )
+        } catch let error as CaptureError {
+            throw error
         } catch {
-            reportCaptureError(error.localizedDescription)
+            throw CaptureError(message: error.localizedDescription)
         }
     }
 
-    /// Publishes a capture failure for the UI to surface. Setting the field
-    /// each call (even if the message hasn't changed) is intentional so
-    /// observers always re-fire — this is consumed once and reset to nil by
-    /// ContentView, so consecutive identical failures should still toast.
-    private func reportCaptureError(_ message: String) {
-        captureError = message
+    // MARK: - Window Hiding
+
+    /// Hides every visible app window and returns them so the caller can
+    /// restore exactly that set once the capture flow finishes.
+    private func hideAppWindows() -> [NSWindow] {
+        let visibleWindows = NSApplication.shared.windows.filter { $0.isVisible }
+        for window in visibleWindows {
+            window.setIsVisible(false)
+        }
+        return visibleWindows
     }
 
     private func restoreWindows(_ windows: [NSWindow]) {

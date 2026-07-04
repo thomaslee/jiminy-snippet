@@ -9,7 +9,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @Environment(ScreenshotManager.self) private var screenshotManager
+    @Environment(CaptureService.self) private var captureService
     @Environment(AnnotationDocument.self) private var document
 
     @State private var selectedTool: AnnotationTool? = nil
@@ -27,7 +27,6 @@ struct ContentView: View {
     @State private var pixelatedImage: NSImage?
     @State private var toast: ExportToast?
     @State private var toastDismissTask: Task<Void, Never>?
-    @State private var isHandlingIncomingCapture = false
 
     private let scaleStep: CGFloat = 0.25
     private let minScale: CGFloat = 0.25
@@ -49,9 +48,6 @@ struct ContentView: View {
                 }
                 regeneratePixelatedImage()
             }
-            .onChange(of: screenshotManager.incomingCapture) {
-                handleIncomingCapture()
-            }
             .onChange(of: document.selectedAnnotationIds) {
                 syncPaletteToSelection()
             }
@@ -62,11 +58,8 @@ struct ContentView: View {
                 // while the window is already open.
                 handlePendingCaptureRequest()
             }
-            .onChange(of: screenshotManager.pendingCaptureRequest) {
+            .onChange(of: captureService.pendingCaptureRequest) {
                 handlePendingCaptureRequest()
-            }
-            .onChange(of: screenshotManager.captureError) {
-                handleCaptureError()
             }
             .modifier(SceneCommandValues(
                 hasImage: document.image != nil,
@@ -206,18 +199,18 @@ struct ContentView: View {
     private var captureMenu: some View {
         Menu {
             Button("Whole screen") {
-                beginNewCapture { screenshotManager.captureFullscreen() }
+                beginNewCapture { try await captureService.captureFullscreen() }
             }
             .help("Capture the entire screen")
             Button("Screen region...") {
-                beginNewCapture { screenshotManager.captureRegion() }
+                beginNewCapture { try await captureService.captureRegion() }
             }
             .help("Drag to capture a rectangular region of the screen")
             Menu("Screen region with delay...") {
                 ForEach(timedCaptureDurations, id: \.self) { seconds in
                     Button("\(seconds) Seconds") {
                         beginNewCapture {
-                            screenshotManager.captureRegionAfterDelay(seconds: seconds)
+                            try await captureService.captureRegionAfterDelay(seconds: seconds)
                         }
                     }
                     .help("Capture a screen region after a \(seconds)-second delay")
@@ -245,53 +238,45 @@ struct ContentView: View {
     /// the unsaved-changes confirmation and annotation clearing logic stay in
     /// a single place regardless of where the request originated.
     private func handlePendingCaptureRequest() {
-        guard let request = screenshotManager.pendingCaptureRequest else { return }
-        screenshotManager.pendingCaptureRequest = nil
+        guard let request = captureService.pendingCaptureRequest else { return }
+        captureService.pendingCaptureRequest = nil
 
         switch request {
         case .fullscreen:
-            beginNewCapture { screenshotManager.captureFullscreen() }
+            beginNewCapture { try await captureService.captureFullscreen() }
         case .region:
-            beginNewCapture { screenshotManager.captureRegion() }
+            beginNewCapture { try await captureService.captureRegion() }
         case .timed(let seconds):
             beginNewCapture {
-                screenshotManager.captureRegionAfterDelay(seconds: seconds)
+                try await captureService.captureRegionAfterDelay(seconds: seconds)
             }
         case .fromClipboard:
             pasteFromClipboard()
         }
     }
 
-    /// Starts a new capture flow. The unsaved-changes prompt is deferred
-    /// until the capture actually succeeds (see `handleIncomingCapture`) so
-    /// cancelling region selection or the countdown doesn't throw away edits.
-    private func beginNewCapture(_ capture: () -> Void) {
+    /// Starts a capture flow and adopts its result. A nil result means the
+    /// user cancelled (Escape during selection or the countdown) — existing
+    /// edits stay untouched, which is also why the unsaved-changes prompt is
+    /// deferred until a capture has actually been acquired.
+    private func beginNewCapture(_ capture: @escaping () async throws -> NSImage?) {
         // Abort any pending timed capture so switching capture modes mid-
         // countdown restores the Jiminy window before the new action runs.
-        screenshotManager.cancelTimedCapture()
-        capture()
+        captureService.cancelTimedCapture()
+        Task {
+            do {
+                guard let image = try await capture() else { return }
+                adoptCapture(image)
+            } catch {
+                presentCaptureFailure(error.localizedDescription)
+            }
+        }
     }
 
     /// Adopts a freshly-acquired capture, prompting the user to discard
     /// unsaved edits first if necessary. If the user declines, the new image
     /// is dropped and existing edits are preserved.
-    ///
-    /// The `isHandlingIncomingCapture` flag guards against re-entrancy:
-    /// `NSAlert.runModal()` pumps the event loop, so a second capture landing
-    /// mid-prompt would otherwise recursively invoke this method. Today no
-    /// code path can deliver a second capture while the modal is up, so the
-    /// guard is belt-and-braces. When we add a global hotkey for region
-    /// capture (or any other background-triggered capture path) it becomes
-    /// load-bearing, and at that point it's worth replacing this whole
-    /// `runModal` flow with a SwiftUI `.confirmationDialog` driven by an
-    /// optional pending-capture state — non-blocking, no nested event loop,
-    /// and serialization falls out of the dialog's own state machine.
-    private func handleIncomingCapture() {
-        guard !isHandlingIncomingCapture else { return }
-        guard let image = screenshotManager.incomingCapture else { return }
-        screenshotManager.incomingCapture = nil
-        isHandlingIncomingCapture = true
-        defer { isHandlingIncomingCapture = false }
+    private func adoptCapture(_ image: NSImage) {
         guard confirmDiscardIfNeeded(
             messageText: "You have unsaved changes",
             informativeText: "Taking a new screenshot will discard your current edits. Continue?",
@@ -301,13 +286,10 @@ struct ContentView: View {
         document.loadImage(image)
     }
 
-    /// Surfaces the most recent capture failure as a toast when the editor
-    /// window is on screen, or as an `NSAlert` when it isn't (e.g. a menu-bar
-    /// triggered capture that failed before the window finished opening).
-    /// Clears the published error so subsequent identical failures retoast.
-    private func handleCaptureError() {
-        guard let message = screenshotManager.captureError else { return }
-        screenshotManager.captureError = nil
+    /// Surfaces a capture failure as a toast when the editor window is on
+    /// screen, or as an `NSAlert` when it isn't (e.g. a menu-bar triggered
+    /// capture that failed before the window finished opening).
+    private func presentCaptureFailure(_ message: String) {
         if isEditorWindowVisible {
             showToast(.error(message: message))
         } else {
@@ -337,7 +319,7 @@ struct ContentView: View {
         proceedButtonTitle: String
     ) -> Bool {
         guard document.hasUnsavedChanges else { return true }
-        return ScreenshotManager.confirmDiscardUnsavedChanges(
+        return confirmDiscardUnsavedChanges(
             messageText: messageText,
             informativeText: informativeText,
             proceedButtonTitle: proceedButtonTitle
@@ -932,6 +914,6 @@ private struct ExportToastView: View {
 
 #Preview {
     ContentView()
-        .environment(ScreenshotManager())
+        .environment(CaptureService())
         .environment(AnnotationDocument())
 }

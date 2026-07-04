@@ -10,7 +10,7 @@ import SwiftUI
 @main
 struct jiminy_snippetApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var screenshotManager = ScreenshotManager()
+    @State private var captureService = CaptureService()
     @State private var document = AnnotationDocument()
 
     var body: some Scene {
@@ -19,7 +19,7 @@ struct jiminy_snippetApp: App {
         // until the user explicitly wants to see it.
         Window("Jiminy Snippet", id: Self.mainWindowID) {
             ContentView()
-                .environment(screenshotManager)
+                .environment(captureService)
                 .environment(document)
                 .onAppear { appDelegate.document = document }
         }
@@ -69,7 +69,7 @@ struct jiminy_snippetApp: App {
                 mainWindowID: Self.mainWindowID,
                 aboutWindowID: Self.aboutWindowID
             )
-            .environment(screenshotManager)
+            .environment(captureService)
         } label: {
             Image(systemName: "camera")
         }
@@ -80,13 +80,13 @@ struct jiminy_snippetApp: App {
 }
 
 /// Menu bar item content. Routes capture commands through
-/// `ScreenshotManager.pendingCaptureRequest`, opens the main editor window,
+/// `CaptureService.pendingCaptureRequest`, opens the main editor window,
 /// and activates the app so the result is immediately visible.
 private struct MenuBarCommands: View {
     let mainWindowID: String
     let aboutWindowID: String
 
-    @Environment(ScreenshotManager.self) private var screenshotManager
+    @Environment(CaptureService.self) private var captureService
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettingsAction
 
@@ -132,7 +132,7 @@ private struct MenuBarCommands: View {
     /// `.task` handler picks it up during its first appearance — otherwise
     /// the value would race the view's initial mount.
     private func request(_ capture: CaptureRequest) {
-        screenshotManager.pendingCaptureRequest = capture
+        captureService.pendingCaptureRequest = capture
         showMainWindow()
     }
 
@@ -448,11 +448,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateNow
         }
 
-        let proceed = ScreenshotManager.confirmDiscardUnsavedChanges(
+        let proceed = confirmDiscardUnsavedChanges(
             messageText: "You have unsaved changes",
             informativeText: "Your screenshot has not been exported since the last edit. Quit anyway?",
             proceedButtonTitle: "Quit"
         )
         return proceed ? .terminateNow : .terminateCancel
     }
+}
+
+/// Presents a modal warning when there are unsaved changes and returns
+/// whether the caller should proceed with the destructive action. Shared by
+/// ContentView (new capture, paste) and AppDelegate (quit).
+@MainActor
+func confirmDiscardUnsavedChanges(
+    messageText: String,
+    informativeText: String,
+    proceedButtonTitle: String
+) -> Bool {
+    let alert = NSAlert()
+    alert.messageText = messageText
+    alert.informativeText = informativeText
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: proceedButtonTitle)
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn
 }
