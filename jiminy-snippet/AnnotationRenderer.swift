@@ -51,6 +51,26 @@ enum RenderConstants {
 /// Draws annotations into a SwiftUI `GraphicsContext` (used by Canvas).
 enum AnnotationRenderer {
 
+    // MARK: - Plain Rendering
+
+    /// Draws every annotation in array (z-) order with no selection chrome.
+    /// This is the export path: `ImageExporter` rasterizes a `Canvas` running
+    /// exactly this code, so saved/copied images match the screen by
+    /// construction.
+    static func drawAnnotations(_ annotations: [Annotation], in context: inout GraphicsContext) {
+        for annotation in annotations {
+            switch annotation {
+            case .arrow(let arrow):
+                drawArrow(arrow, selected: false, showHandles: false, in: &context)
+            case .rectangle(let rectangle):
+                drawRectangle(rectangle, selected: false, showHandles: false, in: &context)
+            case .text(let text):
+                let (resolved, size) = resolveText(text, in: context)
+                drawText(text, resolved: resolved, size: size, in: &context)
+            }
+        }
+    }
+
     // MARK: - Arrow Drawing
 
     /// Draws an arrow with optional selection highlight. `selected` shows the
