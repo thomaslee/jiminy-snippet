@@ -7,10 +7,31 @@
 
 import AppKit
 
+/// A small owned copy of a rectangular pixel region, used to undo/redo a
+/// localized image edit (pixelation) without retaining the whole bitmap.
+struct PixelPatch {
+    /// Region in the image's bottom-left-origin pixel space.
+    let pixelRect: CGRect
+    /// The region's pixels. Must own its backing store (not share the source
+    /// image's, as `CGImage.cropping` would) or the memory saving is lost.
+    let pixels: NSImage
+}
+
 /// Snapshot of the editable state of the canvas at a single point in time.
 /// Captured before each discrete edit so that the operation can later be undone.
 struct EditSnapshot {
-    let image: NSImage
+    /// The image component of the pre-edit state.
+    enum ImageRecord {
+        /// The full previous image. Annotation-only edits store the current
+        /// image by reference (no pixel copy); crop/rotate/resize retain the
+        /// genuinely different predecessor bitmap, which their undo needs.
+        case whole(NSImage)
+        /// The original pixels of the one region a pixelation modified,
+        /// restored by stamping them back over the current image.
+        case patch(PixelPatch)
+    }
+
+    let image: ImageRecord
     let annotations: [Annotation]
 }
 
@@ -26,6 +47,12 @@ struct UndoHistory {
 
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
+
+    /// The snapshot the next `popUndo` / `popRedo` would return. Callers peek
+    /// first to build the matching `current` record for the opposite stack —
+    /// patch records need the same region captured from the current image.
+    var nextUndo: EditSnapshot? { undoStack.last }
+    var nextRedo: EditSnapshot? { redoStack.last }
 
     /// Records a pre-edit snapshot before a new mutation. Clears the redo
     /// stack because starting a fresh edit branch invalidates any pending

@@ -13,7 +13,7 @@ struct UndoHistoryTests {
     private let image = makeTestImage()
 
     private func snapshot(_ annotations: [Annotation] = []) -> EditSnapshot {
-        EditSnapshot(image: image, annotations: annotations)
+        EditSnapshot(image: .whole(image), annotations: annotations)
     }
 
     @Test func startsEmpty() {

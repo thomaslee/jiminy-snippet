@@ -41,6 +41,45 @@ struct AnnotationDocumentTests {
         #expect(document.hasUnsavedChanges)
     }
 
+    // MARK: - Pixelation Undo
+
+    private func imageBytes(of document: AnnotationDocument) throws -> [UInt8] {
+        let image = try #require(document.image)
+        return try #require(rgbaBytes(of: image))
+    }
+
+    @Test func pixelationUndoRestoresExactPixelsAndRedoReapplies() throws {
+        let document = AnnotationDocument()
+        document.image = makeGradientImage()
+        // Deliberately off the pixelate block grid.
+        let rect = CGRect(x: 13, y: 17, width: 25, height: 22)
+
+        let originalBytes = try imageBytes(of: document)
+        document.applyPixelation(rect: rect)
+        let pixelatedBytes = try imageBytes(of: document)
+        #expect(document.canUndo)
+        #expect(pixelatedBytes != originalBytes)
+
+        #expect(document.undo())
+        #expect(try imageBytes(of: document) == originalBytes)
+        #expect(document.canRedo)
+
+        #expect(document.redo())
+        #expect(try imageBytes(of: document) == pixelatedBytes)
+
+        // Patches must survive repeated round trips.
+        #expect(document.undo())
+        #expect(try imageBytes(of: document) == originalBytes)
+    }
+
+    @Test func pixelationMissingTheImageRecordsNoUndo() {
+        let document = makeDocument()
+        let imageBefore = document.image
+        document.applyPixelation(rect: CGRect(x: -50, y: -50, width: 10, height: 10))
+        #expect(!document.canUndo)
+        #expect(document.image === imageBefore)
+    }
+
     // MARK: - Undo / Redo
 
     @Test func undoRestoresSnapshotAndRedoReappliesEdit() {

@@ -141,6 +141,12 @@ struct CanvasDragController {
             switch op {
             case .croppingSelection, .marqueeSelecting:
                 break
+            case .creatingPixelate:
+                // Pixelation records its own patch-sized undo entry when it
+                // commits (AnnotationDocument.applyPixelation) — a full
+                // snapshot here would pin the entire pre-edit bitmap for a
+                // localized edit.
+                break
             default:
                 document.recordSnapshot()
             }
@@ -323,12 +329,9 @@ struct CanvasDragController {
             let rect = CGRect(from: start, to: location)
             if rect.width > 1, rect.height > 1 {
                 document.applyPixelation(rect: rect)
-            } else {
-                // No region drawn — drop the snapshot taken at drag start so
-                // an accidental click on the pixelate tool doesn't burn an
-                // undo slot.
-                document.discardLastSnapshot()
             }
+            // Nothing to clean up on a degenerate drag: pixelation only
+            // records its undo entry when it actually commits.
             return .toolFinished
 
         case .resizingRectangle(let id, _, _, _):

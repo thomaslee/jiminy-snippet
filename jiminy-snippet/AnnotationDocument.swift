@@ -61,7 +61,7 @@ final class AnnotationDocument {
     /// gesture-driven edits, and internally by the document's own operations.
     func recordSnapshot() {
         guard let image else { return }
-        undoHistory.push(EditSnapshot(image: image, annotations: annotations))
+        undoHistory.push(EditSnapshot(image: .whole(image), annotations: annotations))
     }
 
     /// Drops the most recently pushed snapshot. Used when an in-flight edit is
@@ -75,37 +75,69 @@ final class AnnotationDocument {
     /// nothing to undo.
     @discardableResult
     func undo() -> Bool {
-        guard let current = currentSnapshot(),
-              let previous = undoHistory.popUndo(current: current)
+        guard let record = undoHistory.nextUndo,
+              let restored = state(restoring: record),
+              let counterpart = counterpart(of: record)
         else { return false }
-        apply(snapshot: previous)
+        _ = undoHistory.popUndo(current: counterpart)
+        apply(image: restored.image, annotations: restored.annotations)
         return true
     }
 
     /// Inverse of `undo`. Returns false when there is nothing to redo.
     @discardableResult
     func redo() -> Bool {
-        guard let current = currentSnapshot(),
-              let next = undoHistory.popRedo(current: current)
+        guard let record = undoHistory.nextRedo,
+              let restored = state(restoring: record),
+              let counterpart = counterpart(of: record)
         else { return false }
-        apply(snapshot: next)
+        _ = undoHistory.popRedo(current: counterpart)
+        apply(image: restored.image, annotations: restored.annotations)
         return true
     }
 
-    /// Snapshot of the current editable state, used by undo/redo to stash the
-    /// "before" state onto the opposite stack. Returns nil if there's no image
-    /// loaded — in which case there's nothing to undo anyway.
-    private func currentSnapshot() -> EditSnapshot? {
+    /// The full editable state a record restores. Whole-image records carry
+    /// it directly; patch records rebuild the previous image by stamping the
+    /// saved pixels over the current one. Resolved before touching the
+    /// stacks so a failure can't leave history half-popped.
+    private func state(
+        restoring record: EditSnapshot
+    ) -> (image: NSImage, annotations: [Annotation])? {
         guard let image else { return nil }
-        return EditSnapshot(image: image, annotations: annotations)
+        switch record.image {
+        case .whole(let previous):
+            return (previous, record.annotations)
+        case .patch(let patch):
+            guard let restored = image.stampingPatch(patch.pixels, at: patch.pixelRect)
+            else { return nil }
+            return (restored, record.annotations)
+        }
     }
 
-    /// Restores a snapshot produced by undo or redo. Clears selection because
-    /// it becomes meaningless against the restored state.
-    private func apply(snapshot: EditSnapshot) {
-        annotations = snapshot.annotations
-        if image !== snapshot.image {
-            image = snapshot.image
+    /// The record for the opposite stack that reverses `record`. Mirrors the
+    /// record's shape: whole-image records stash the current image by
+    /// reference; patch records capture the same region's current pixels, so
+    /// both directions of a pixelation stay patch-sized.
+    private func counterpart(of record: EditSnapshot) -> EditSnapshot? {
+        guard let image else { return nil }
+        switch record.image {
+        case .whole:
+            return EditSnapshot(image: .whole(image), annotations: annotations)
+        case .patch(let patch):
+            guard let pixels = image.pixelPatch(in: patch.pixelRect) else { return nil }
+            return EditSnapshot(
+                image: .patch(PixelPatch(pixelRect: patch.pixelRect, pixels: pixels)),
+                annotations: annotations
+            )
+        }
+    }
+
+    /// Applies a state produced by undo or redo. Clears selection because it
+    /// becomes meaningless against the restored state.
+    private func apply(image newImage: NSImage, annotations newAnnotations: [Annotation]) {
+        annotations = newAnnotations
+        if image !== newImage {
+            image = newImage
         }
         selectedAnnotationIds.removeAll()
     }
@@ -222,14 +254,21 @@ final class AnnotationDocument {
     }
 
     /// Applies a destructive pixelation to the image, replacing the rect's
-    /// pixels with their pixelated equivalents. The canvas already pushed an
-    /// undo snapshot at drag start, so no snapshot is recorded here. Drops
-    /// selection so the user reacts to the redacted image rather than
-    /// carrying selection state from the pre-redaction view.
+    /// pixels with their pixelated equivalents. Records its own patch-sized
+    /// undo entry: only the affected region's original pixels are retained,
+    /// not the whole predecessor bitmap. Drops selection so the user reacts
+    /// to the redacted image rather than carrying selection state from the
+    /// pre-redaction view.
     func applyPixelation(rect: CGRect) {
         guard let image,
+              let region = image.pixelationBounds(for: rect),
+              let originals = image.pixelPatch(in: region),
               let updated = image.pixelating(rect: rect, blockSize: PixelateDefaults.blockSize)
         else { return }
+        undoHistory.push(EditSnapshot(
+            image: .patch(PixelPatch(pixelRect: region, pixels: originals)),
+            annotations: annotations
+        ))
         self.image = updated
         selectedAnnotationIds.removeAll()
     }

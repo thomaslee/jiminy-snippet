@@ -19,6 +19,29 @@ func makeTestImage(width: CGFloat = 100, height: CGFloat = 100) -> NSImage {
     }
 }
 
+/// A 1x image where every pixel has a distinct color, so any block-grid
+/// phase error or unintended pixel change shows up as a byte difference.
+func makeGradientImage(size: Int = 64) -> NSImage {
+    var bytes = [UInt8](repeating: 0, count: size * size * 4)
+    for y in 0 ..< size {
+        for x in 0 ..< size {
+            let i = (y * size + x) * 4
+            bytes[i] = UInt8((x * 4) % 256)
+            bytes[i + 1] = UInt8((y * 4) % 256)
+            bytes[i + 2] = UInt8(((x + y) * 2) % 256)
+            bytes[i + 3] = 255
+        }
+    }
+    let cg = bytes.withUnsafeMutableBytes { ptr in
+        CGContext(
+            data: ptr.baseAddress, width: size, height: size, bitsPerComponent: 8,
+            bytesPerRow: size * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!.makeImage()!
+    }
+    return NSImage(cgImage: cg, size: NSSize(width: size, height: size))
+}
+
 /// Renders `image` into an RGBA8 bitmap and returns the raw bytes, rows
 /// ordered top-to-bottom. Nil when the image can't be rasterized.
 func rgbaBytes(of image: NSImage) -> [UInt8]? {

@@ -417,19 +417,9 @@ extension NSImage {
         let pixelW = CGFloat(originalCG.width)
         let pixelH = CGFloat(originalCG.height)
         let sx = pixelW / pointSize.width
-        let sy = pixelH / pointSize.height
         let fullPixelRect = CGRect(x: 0, y: 0, width: pixelW, height: pixelH)
 
-        // Convert the canvas-point rect (top-left origin) into the CGContext's
-        // bottom-left-origin pixel space.
-        let pixelRect = CGRect(
-            x: rect.minX * sx,
-            y: pixelH - rect.maxY * sy,
-            width: rect.width * sx,
-            height: rect.height * sy
-        ).integral.intersection(fullPixelRect)
-
-        guard pixelRect.width >= 1, pixelRect.height >= 1 else { return self }
+        guard let pixelRect = pixelationBounds(for: rect) else { return self }
 
         // Crop the patch to filter, expanded outward to the pixellate block
         // grid so its blocks land exactly where a full-image pass would put
@@ -477,6 +467,73 @@ extension NSImage {
 
         guard let output = context.makeImage() else { return nil }
         return NSImage(cgImage: output, size: pointSize)
+    }
+
+    /// The region of the bitmap (bottom-left-origin pixel space) that
+    /// `pixelating(rect:blockSize:)` modifies for a canvas-point `rect`, or
+    /// nil when the rect misses the bitmap. Undo captures exactly this region.
+    func pixelationBounds(for rect: CGRect) -> CGRect? {
+        guard let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return nil
+        }
+        let pointSize = size
+        guard pointSize.width > 0, pointSize.height > 0 else { return nil }
+
+        let pixelW = CGFloat(cgImage.width)
+        let pixelH = CGFloat(cgImage.height)
+        let sx = pixelW / pointSize.width
+        let sy = pixelH / pointSize.height
+
+        // Convert the canvas-point rect (top-left origin) into bottom-left-
+        // origin pixel space.
+        let pixelRect = CGRect(
+            x: rect.minX * sx,
+            y: pixelH - rect.maxY * sy,
+            width: rect.width * sx,
+            height: rect.height * sy
+        ).integral.intersection(CGRect(x: 0, y: 0, width: pixelW, height: pixelH))
+
+        guard pixelRect.width >= 1, pixelRect.height >= 1 else { return nil }
+        return pixelRect
+    }
+
+    /// An independent copy of the pixels inside `pixelRect` (bottom-left-
+    /// origin pixel space). Unlike `CGImage.cropping`, the result owns its
+    /// backing store, so retaining it — e.g. in undo history — doesn't pin
+    /// this image's full bitmap.
+    func pixelPatch(in pixelRect: CGRect) -> NSImage? {
+        guard let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let context = Self.bitmapContext(
+                  pixelWidth: Int(pixelRect.width), pixelHeight: Int(pixelRect.height)
+              )
+        else { return nil }
+        // Draw the full image offset so `pixelRect` lands on the context.
+        context.draw(cgImage, in: CGRect(
+            x: -pixelRect.minX,
+            y: -pixelRect.minY,
+            width: CGFloat(cgImage.width),
+            height: CGFloat(cgImage.height)
+        ))
+        guard let output = context.makeImage() else { return nil }
+        return NSImage(cgImage: output, size: pixelRect.size)
+    }
+
+    /// Returns a copy of this image with `patch` replacing the pixels in
+    /// `pixelRect` (bottom-left-origin pixel space). Inverse of the pixelate
+    /// stamp: undo re-applies a region's saved original pixels, redo the
+    /// pixelated ones.
+    func stampingPatch(_ patch: NSImage, at pixelRect: CGRect) -> NSImage? {
+        guard let baseCG = cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let patchCG = patch.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let context = Self.bitmapContext(pixelWidth: baseCG.width, pixelHeight: baseCG.height)
+        else { return nil }
+        context.draw(baseCG, in: CGRect(x: 0, y: 0, width: baseCG.width, height: baseCG.height))
+        // Replace outright rather than blend, so partially transparent
+        // originals restore exactly.
+        context.setBlendMode(.copy)
+        context.draw(patchCG, in: pixelRect)
+        guard let output = context.makeImage() else { return nil }
+        return NSImage(cgImage: output, size: size)
     }
 
     /// Returns a new image rotated by 90° with swapped dimensions, preserving
