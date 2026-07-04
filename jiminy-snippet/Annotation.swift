@@ -5,6 +5,7 @@
 //  Created by Tom on 4/2/26.
 //
 
+import Accelerate
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import SwiftUI
@@ -438,29 +439,57 @@ extension NSImage {
     }
 
     /// Returns a new image rotated by 90° with swapped dimensions, preserving
-    /// the source bitmap's pixel resolution.
+    /// the source bitmap's pixel resolution. Uses Accelerate's SIMD rotate,
+    /// which is an order of magnitude faster than drawing through a rotated
+    /// `CGContext` for large screenshots.
     func rotated(clockwise: Bool) -> NSImage? {
         let pointSize = size
         guard pointSize.width > 0, pointSize.height > 0,
-              let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil)
+              let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil),
+              var format = vImage_CGImageFormat(
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  colorSpace: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+              )
         else { return nil }
 
-        let pixelWidth = cgImage.height
-        let pixelHeight = cgImage.width
+        // `InitWithCGImage` converts any source format (BGRA screenshots,
+        // 16-bit, wide gamut) into the 8-bit RGBA layout above — the same
+        // normalization every other edit operation applies via bitmapContext.
+        var source = vImage_Buffer()
+        guard vImageBuffer_InitWithCGImage(
+            &source, &format, nil, cgImage, vImage_Flags(kvImageNoFlags)
+        ) == kvImageNoError else { return nil }
+        defer { free(source.data) }
 
-        guard let context = Self.bitmapContext(pixelWidth: pixelWidth, pixelHeight: pixelHeight)
-        else { return nil }
-        context.translateBy(x: CGFloat(pixelWidth) / 2, y: CGFloat(pixelHeight) / 2)
-        context.rotate(by: (clockwise ? -1 : 1) * .pi / 2)
-        context.translateBy(x: -CGFloat(cgImage.width) / 2, y: -CGFloat(cgImage.height) / 2)
-        context.draw(
-            cgImage,
-            in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height)
+        var rotated = vImage_Buffer()
+        guard vImageBuffer_Init(
+            &rotated,
+            vImagePixelCount(cgImage.width),   // rotated height
+            vImagePixelCount(cgImage.height),  // rotated width
+            32,
+            vImage_Flags(kvImageNoFlags)
+        ) == kvImageNoError else { return nil }
+        defer { free(rotated.data) }
+
+        var background: [UInt8] = [0, 0, 0, 0]
+        guard vImageRotate90_ARGB8888(
+            &source,
+            &rotated,
+            UInt8(clockwise ? kRotate90DegreesClockwise : kRotate90DegreesCounterClockwise),
+            &background,
+            vImage_Flags(kvImageNoFlags)
+        ) == kvImageNoError else { return nil }
+
+        var error: vImage_Error = kvImageNoError
+        let output = vImageCreateCGImageFromBuffer(
+            &rotated, &format, nil, nil, vImage_Flags(kvImageNoFlags), &error
         )
-
-        guard let output = context.makeImage() else { return nil }
+        guard error == kvImageNoError, let rotatedCG = output?.takeRetainedValue()
+        else { return nil }
         return NSImage(
-            cgImage: output,
+            cgImage: rotatedCG,
             size: NSSize(width: pointSize.height, height: pointSize.width)
         )
     }

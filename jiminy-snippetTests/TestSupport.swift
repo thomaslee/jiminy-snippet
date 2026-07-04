@@ -19,6 +19,35 @@ func makeTestImage(width: CGFloat = 100, height: CGFloat = 100) -> NSImage {
     }
 }
 
+/// Renders `image` into an RGBA8 bitmap and returns the raw bytes, rows
+/// ordered top-to-bottom. Nil when the image can't be rasterized.
+func rgbaBytes(of image: NSImage) -> [UInt8]? {
+    guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+    var buffer = [UInt8](repeating: 0, count: cg.width * cg.height * 4)
+    let rendered = buffer.withUnsafeMutableBytes { ptr -> Bool in
+        guard let ctx = CGContext(
+            data: ptr.baseAddress, width: cg.width, height: cg.height,
+            bitsPerComponent: 8, bytesPerRow: cg.width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return false }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        return true
+    }
+    return rendered ? buffer : nil
+}
+
+/// The RGBA components of the pixel at (`x`, `y`) measured from the image's
+/// visual top-left corner.
+func pixelRGBA(in image: NSImage, x: Int, y: Int) -> [UInt8]? {
+    guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+          x >= 0, y >= 0, x < cg.width, y < cg.height,
+          let bytes = rgbaBytes(of: image)
+    else { return nil }
+    let start = (y * cg.width + x) * 4
+    return Array(bytes[start ..< start + 4])
+}
+
 func approxEqual(_ a: CGFloat, _ b: CGFloat, tolerance: CGFloat = 0.001) -> Bool {
     abs(a - b) <= tolerance
 }

@@ -46,7 +46,20 @@ struct ContentView: View {
                 if oldImage?.size != newImage?.size {
                     zoomToFit()
                 }
-                regeneratePixelatedImage()
+                // The cached pixelate preview no longer matches the image.
+                // Drop it rather than eagerly recomputing, so edits that
+                // never use the pixelate tool don't pay for a full-image
+                // CIPixellate. Rebuilt immediately only if the tool is
+                // active right now (e.g. undo while mid-redaction).
+                pixelatedImage = nil
+                if selectedTool == .pixelate {
+                    regeneratePixelatedImage()
+                }
+            }
+            .onChange(of: selectedTool) {
+                if selectedTool == .pixelate, pixelatedImage == nil {
+                    regeneratePixelatedImage()
+                }
             }
             .onChange(of: document.selectedAnnotationIds) {
                 syncPaletteToSelection()
@@ -533,10 +546,10 @@ struct ContentView: View {
         }
     }
 
-    /// Recomputes the cached pixelated copy of the current image. Cheap when
-    /// no image is loaded; otherwise runs CIPixellate once on the source.
-    /// Called whenever `document.image` changes — fresh capture, crop, rotate,
-    /// resize, paste, undo/redo that swaps the image, or a pixelate apply.
+    /// Recomputes the cached pixelated copy of the current image, which the
+    /// canvas stamps clipped to the drag rect for the live pixelate preview.
+    /// Built lazily — only when the pixelate tool becomes active, or when the
+    /// image changes while it is — so other edits never run CIPixellate.
     private func regeneratePixelatedImage() {
         guard let image = document.image else {
             pixelatedImage = nil
