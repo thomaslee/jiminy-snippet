@@ -502,9 +502,12 @@ enum AnnotationRenderer {
         return CGPoint(x: dx * cosA - dy * sinA, y: dx * sinA + dy * cosA)
     }
 
-    /// Builds a closed filled-polygon `Path` for a cartoony sticker arrow:
-    /// a chunky shaft opening into a big triangular head. Proportions scale
-    /// with `lineWidth`. Returns an empty path for zero-length arrows.
+    /// Builds a closed filled `Path` for a cartoony arrow: a
+    /// tapered shaft that starts narrow at the tail, swells toward the head,
+    /// and opens into a big triangular head. The shaft edges bow gently
+    /// inward (concave) so the taper reads as a hand-drawn swoosh rather
+    /// than a plain wedge. Proportions scale with `lineWidth`. Returns an
+    /// empty path for zero-length arrows.
     static func arrowPath(start: CGPoint, end: CGPoint, lineWidth: CGFloat) -> Path {
         var path = Path()
         let dx = end.x - start.x
@@ -514,10 +517,17 @@ enum AnnotationRenderer {
 
         // Proportions are tuned for a bold "sticker" look at lineWidth=4.
         let w = lineWidth
-        let shaftHalf = w * 1.4                    // shaft thickness ≈ 2.8 × lineWidth
-        let headHalf = w * 3.2                     // head width     ≈ 6.4 × lineWidth
+        let tailHalf = w * 0.4                     // narrow tail — the taper sells the look
+        let shaftHalf = w * 1.8                    // widest shaft point, at the head junction
+        let headHalf = w * 3.4                     // head width ≈ 6.8 × lineWidth
         let headLen = min(w * 5.5, length * 0.85)  // clamp so short arrows stay arrow-shaped
         let shaftLen = max(0, length - headLen)
+
+        // Control point for the concave shaft edges: at the midpoint the
+        // shaft is thinner than a straight taper would make it, bowing both
+        // edges toward the centerline.
+        let controlHalf = tailHalf + (shaftHalf - tailHalf) * 0.25
+        let controlX = shaftLen * 0.55
 
         let cosA = dx / length
         let sinA = dy / length
@@ -531,14 +541,21 @@ enum AnnotationRenderer {
             )
         }
 
-        // Polygon vertices, traced around the arrow outline.
-        path.move(to: transform(0, -shaftHalf))
-        path.addLine(to: transform(shaftLen, -shaftHalf))
+        // Traced around the arrow outline: tail edge → curved shaft edge →
+        // head barb → tip → and back down the other side, mirrored.
+        path.move(to: transform(0, -tailHalf))
+        path.addQuadCurve(
+            to: transform(shaftLen, -shaftHalf),
+            control: transform(controlX, -controlHalf)
+        )
         path.addLine(to: transform(shaftLen, -headHalf))
         path.addLine(to: transform(length, 0))
         path.addLine(to: transform(shaftLen, headHalf))
         path.addLine(to: transform(shaftLen, shaftHalf))
-        path.addLine(to: transform(0, shaftHalf))
+        path.addQuadCurve(
+            to: transform(0, tailHalf),
+            control: transform(controlX, controlHalf)
+        )
         path.closeSubpath()
         return path
     }
