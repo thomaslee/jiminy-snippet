@@ -239,7 +239,7 @@ struct AnnotationCanvas: View {
                     start: start,
                     end: end,
                     color: selectedColor,
-                    lineWidth: ArrowAnnotation.defaultLineWidth,
+                    lineWidth: ArrowAnnotation.defaultLineWidth(for: imageSize),
                     selected: false,
                     in: &context
                 )
@@ -249,6 +249,7 @@ struct AnnotationCanvas: View {
                 let draft = RectangleAnnotation(
                     rect: CGRect(from: start, to: end),
                     color: selectedColor,
+                    lineWidth: RectangleAnnotation.defaultLineWidth(for: imageSize),
                     style: rectangleFillStyle
                 )
                 AnnotationRenderer.drawRectangle(draft, selected: false, showHandles: false, in: &context)
@@ -542,7 +543,8 @@ struct AnnotationCanvas: View {
         let annotation = TextAnnotation(
             position: location,
             text: "",
-            color: selectedColor
+            color: selectedColor,
+            fontSize: TextAnnotation.defaultFontSize(for: imageSize)
         )
         annotations.append(.text(annotation))
         editing = EditingState(id: annotation.id, originalText: "")

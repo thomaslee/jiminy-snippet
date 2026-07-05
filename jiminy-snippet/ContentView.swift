@@ -555,7 +555,7 @@ struct ContentView: View {
             pixelatedImage = nil
             return
         }
-        pixelatedImage = image.pixelated(blockSize: PixelateDefaults.blockSize)
+        pixelatedImage = image.pixelated(blockSize: PixelateDefaults.blockSize(for: image.size))
     }
 
     private func undo() {

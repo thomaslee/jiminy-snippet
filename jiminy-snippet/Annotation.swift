@@ -41,8 +41,30 @@ enum RectangleFillStyle: String, CaseIterable, Equatable {
     case filled
 }
 
+/// Scales annotation creation defaults with the image, so a new annotation
+/// occupies the same fraction of the image regardless of its resolution.
+/// Annotations live in image point space and zoom with the canvas, so this
+/// only matters at creation time — zoom level never affects relative size.
+enum AnnotationDefaults {
+    /// Largest image dimension at which the unscaled defaults read well.
+    private static let referenceDimension: CGFloat = 1200
+
+    /// Multiplier for creation defaults (font size, line width, pixelate
+    /// block size). Clamped to ≥ 1 so images at or below the reference size
+    /// keep the tuned baseline values.
+    static func scale(for imageSize: CGSize) -> CGFloat {
+        max(1, max(imageSize.width, imageSize.height) / referenceDimension)
+    }
+}
+
 struct ArrowAnnotation: Identifiable, Equatable {
     static let defaultLineWidth: CGFloat = 4
+
+    /// Creation-time line width, scaled so arrows keep the same relative
+    /// weight on any size image.
+    static func defaultLineWidth(for imageSize: CGSize) -> CGFloat {
+        defaultLineWidth * AnnotationDefaults.scale(for: imageSize)
+    }
 
     let id = UUID()
     var start: CGPoint
@@ -64,6 +86,12 @@ struct ArrowAnnotation: Identifiable, Equatable {
 
 struct RectangleAnnotation: Identifiable, Equatable {
     static let defaultLineWidth: CGFloat = 4
+
+    /// Creation-time line width, scaled so rectangles keep the same relative
+    /// weight on any size image.
+    static func defaultLineWidth(for imageSize: CGSize) -> CGFloat {
+        defaultLineWidth * AnnotationDefaults.scale(for: imageSize)
+    }
 
     let id = UUID()
     /// May be non-standardized during an in-flight drag (negative width/height
@@ -94,17 +122,33 @@ struct RectangleAnnotation: Identifiable, Equatable {
 /// directly to the bitmap (not stored as an annotation) so a redacted region
 /// can't be moved, deleted, or otherwise un-hidden by accident.
 enum PixelateDefaults {
-    /// Block size in points. Tuned to be aggressive enough that small text
-    /// (e.g. a 12pt token) is unrecoverable on a Retina display.
-    static let blockSize: CGFloat = 28
+    /// Block size in points at the reference image size. Tuned to be
+    /// aggressive enough that small text (e.g. a 12pt token) is unrecoverable
+    /// on a Retina display.
+    private static let baseBlockSize: CGFloat = 28
+
+    /// Block size for an image of `imageSize`, scaled so redaction blocks
+    /// keep the same relative chunkiness on any size image. Scaling up only —
+    /// larger blocks are strictly more destructive, never less safe.
+    static func blockSize(for imageSize: CGSize) -> CGFloat {
+        baseBlockSize * AnnotationDefaults.scale(for: imageSize)
+    }
 }
 
 struct TextAnnotation: Identifiable, Equatable {
+    static let defaultFontSize: CGFloat = 36
+
+    /// Creation-time font size, scaled so labels keep the same relative size
+    /// on any size image.
+    static func defaultFontSize(for imageSize: CGSize) -> CGFloat {
+        defaultFontSize * AnnotationDefaults.scale(for: imageSize)
+    }
+
     let id = UUID()
     var position: CGPoint
     var text: String
     var color: Color
-    var fontSize: CGFloat = 24
+    var fontSize: CGFloat = TextAnnotation.defaultFontSize
     var rotation: Double = 0
     var scaleX: CGFloat = 1
     var scaleY: CGFloat = 1

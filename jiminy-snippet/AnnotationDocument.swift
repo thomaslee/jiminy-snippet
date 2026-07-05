@@ -263,7 +263,9 @@ final class AnnotationDocument {
         guard let image,
               let region = image.pixelationBounds(for: rect),
               let originals = image.pixelPatch(in: region),
-              let updated = image.pixelating(rect: rect, blockSize: PixelateDefaults.blockSize)
+              let updated = image.pixelating(
+                  rect: rect, blockSize: PixelateDefaults.blockSize(for: image.size)
+              )
         else { return }
         undoHistory.push(EditSnapshot(
             image: .patch(PixelPatch(pixelRect: region, pixels: originals)),

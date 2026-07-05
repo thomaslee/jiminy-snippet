@@ -307,7 +307,12 @@ struct CanvasDragController {
 
         switch operation {
         case .creatingArrow(let start, _):
-            let arrow = ArrowAnnotation(start: start, end: location, color: context.selectedColor)
+            let arrow = ArrowAnnotation(
+                start: start,
+                end: location,
+                color: context.selectedColor,
+                lineWidth: ArrowAnnotation.defaultLineWidth(for: context.imageSize)
+            )
             document.annotations.append(.arrow(arrow))
             document.selectedAnnotationIds = [arrow.id]
             return .toolFinished
@@ -318,6 +323,7 @@ struct CanvasDragController {
                 let rectangle = RectangleAnnotation(
                     rect: rect,
                     color: context.selectedColor,
+                    lineWidth: RectangleAnnotation.defaultLineWidth(for: context.imageSize),
                     style: context.rectangleFillStyle
                 )
                 document.annotations.append(.rectangle(rectangle))
