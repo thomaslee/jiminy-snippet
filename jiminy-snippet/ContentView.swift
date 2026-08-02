@@ -500,8 +500,16 @@ struct ContentView: View {
               model.width >= 1, model.height >= 1
         else { return }
 
+        // The dialog operates in pixels, but resizeImage(to:) takes points and
+        // resized(to:) preserves pixel density — on a Retina capture, passing
+        // the pixel values through unconverted would double the result.
+        let scaleX = CGFloat(currentWidth) / image.size.width
+        let scaleY = CGFloat(currentHeight) / image.size.height
         document.resizeImage(
-            to: NSSize(width: CGFloat(model.width), height: CGFloat(model.height))
+            to: NSSize(
+                width: CGFloat(model.width) / scaleX,
+                height: CGFloat(model.height) / scaleY
+            )
         )
         // zoomToFit() is handled by the onChange observer on document.image
     }
