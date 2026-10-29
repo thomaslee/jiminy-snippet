@@ -1,8 +1,0 @@
-#!/bin/bash
-
-. "$(dirname "$0")/sandbox.conf"
-
-set -ex
-
-exec docker sandbox run "$SANDBOX_NAME" -- --allow-dangerously-skip-permissions
-

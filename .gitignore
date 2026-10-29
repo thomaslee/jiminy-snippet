@@ -54,7 +54,3 @@ fastlane/test_output
 CLAUDE.local.md
 .claude/
 
-# Python (devscripts/toolserver)
-__pycache__/
-*.pyc
-.venv/
