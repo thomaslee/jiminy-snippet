@@ -20,11 +20,6 @@ struct ContentView: View {
     @State private var rectangleFillStyle: RectangleFillStyle = .outlined
     @State private var cropMode: Bool = false
     @State private var cropRect: CGRect? = nil
-    /// Pre-pixelated copy of the current image, regenerated when the
-    /// underlying image changes (new capture, crop, rotate, resize, pixelate
-    /// commit). Used as the live preview while the user drags the destructive
-    /// pixelate tool.
-    @State private var pixelatedImage: NSImage?
     @State private var toast: ExportToast?
     @State private var toastDismissTask: Task<Void, Never>?
 
@@ -45,20 +40,6 @@ struct ContentView: View {
                 // committing a pixelate — keeps the user's current zoom.
                 if oldImage?.size != newImage?.size {
                     zoomToFit()
-                }
-                // The cached pixelate preview no longer matches the image.
-                // Drop it rather than eagerly recomputing, so edits that
-                // never use the pixelate tool don't pay for a full-image
-                // CIPixellate. Rebuilt immediately only if the tool is
-                // active right now (e.g. undo while mid-redaction).
-                pixelatedImage = nil
-                if selectedTool == .pixelate {
-                    regeneratePixelatedImage()
-                }
-            }
-            .onChange(of: selectedTool) {
-                if selectedTool == .pixelate, pixelatedImage == nil {
-                    regeneratePixelatedImage()
                 }
             }
             .onChange(of: document.selectedAnnotationIds) {
@@ -107,7 +88,6 @@ struct ContentView: View {
             if let image = document.image {
                 AnnotationCanvas(
                     image: image,
-                    pixelatedImage: pixelatedImage,
                     selectedTool: $selectedTool,
                     selectedColor: selectedColor,
                     rectangleFillStyle: rectangleFillStyle,
@@ -552,18 +532,6 @@ struct ContentView: View {
         if let index = AnnotationPalette.colors.firstIndex(where: { $0.color == annotation.color }) {
             selectedColorIndex = index
         }
-    }
-
-    /// Recomputes the cached pixelated copy of the current image, which the
-    /// canvas stamps clipped to the drag rect for the live pixelate preview.
-    /// Built lazily — only when the pixelate tool becomes active, or when the
-    /// image changes while it is — so other edits never run CIPixellate.
-    private func regeneratePixelatedImage() {
-        guard let image = document.image else {
-            pixelatedImage = nil
-            return
-        }
-        pixelatedImage = image.pixelated(blockSize: PixelateDefaults.blockSize(for: image.size))
     }
 
     private func undo() {

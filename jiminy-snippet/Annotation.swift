@@ -410,107 +410,64 @@ extension NSImage {
 
     /// Runs `CIPixellate` over `source` with the block grid anchored at
     /// `gridAnchor`, expressed in the source's bottom-left-origin pixel space.
+    /// Samples are clamped to the source's extent, so a block straddling its
+    /// edge takes its color from the nearest edge pixel rather than from
+    /// beyond it.
     private static func pixellated(
         _ source: CGImage, scalePixels: CGFloat, gridAnchor: CGPoint
     ) -> CGImage? {
         let filter = CIFilter.pixellate()
         let input = CIImage(cgImage: source)
-        filter.inputImage = input
+        filter.inputImage = input.clampedToExtent()
         filter.scale = Float(scalePixels)
         filter.center = gridAnchor
         guard let output = filter.outputImage else { return nil }
         return pixellateContext.createCGImage(output, from: input.extent)
     }
 
-    /// Returns a copy of this image with `CIPixellate` applied, producing
-    /// chunky square blocks of `blockSize` points. Preserves the bitmap's
-    /// pixel resolution so the result remains crisp on Retina. Returns nil
-    /// when the image has no rasterizable representation.
-    func pixelated(blockSize: CGFloat) -> NSImage? {
-        guard let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-            return nil
-        }
-        let pointSize = size
-        guard pointSize.width > 0, pointSize.height > 0 else { return nil }
-
-        // CIPixellate's `scale` is in pixels — scale up to match Retina
-        // assets. Anchor the grid at the image origin so blocks start
-        // cleanly at the edge.
-        let pixelsPerPoint = CGFloat(cgImage.width) / pointSize.width
-        guard let rendered = Self.pixellated(
-            cgImage, scalePixels: max(1, blockSize * pixelsPerPoint), gridAnchor: .zero
-        ) else { return nil }
-        return NSImage(cgImage: rendered, size: pointSize)
-    }
-
     /// Returns a copy of this image with the given canvas-point rect replaced
     /// by a pixelated version of the underlying pixels. The rest of the
     /// bitmap is untouched. Used by the destructive pixelate tool — once
     /// applied, only an explicit Undo can recover the original pixels.
-    ///
-    /// Only the affected patch is filtered, not the whole bitmap — pixelating
-    /// a small region of a large screenshot costs patch-sized CIPixellate
-    /// work rather than two extra full-size renders.
     func pixelating(rect: CGRect, blockSize: CGFloat) -> NSImage? {
-        guard let originalCG = cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-            return nil
-        }
-        let pointSize = size
-        guard pointSize.width > 0, pointSize.height > 0 else { return nil }
-
-        let pixelW = CGFloat(originalCG.width)
-        let pixelH = CGFloat(originalCG.height)
-        let sx = pixelW / pointSize.width
-        let fullPixelRect = CGRect(x: 0, y: 0, width: pixelW, height: pixelH)
-
         guard let pixelRect = pixelationBounds(for: rect) else { return self }
+        guard let patch = pixelatedPatch(in: pixelRect, blockSize: blockSize) else { return nil }
+        return stampingPatch(patch, at: pixelRect)
+    }
 
-        // Crop the patch to filter, expanded outward to the pixellate block
-        // grid so its blocks land exactly where a full-image pass would put
-        // them — the live drag preview clips a full-image pixelated copy, and
-        // the committed blocks must not shift relative to it.
-        let scalePixels = max(1, blockSize * sx)
-        let alignedMinX = floor(pixelRect.minX / scalePixels) * scalePixels
-        let alignedMinY = floor(pixelRect.minY / scalePixels) * scalePixels
-        let cropRect = CGRect(
-            x: alignedMinX,
-            y: alignedMinY,
-            width: ceil(pixelRect.maxX / scalePixels) * scalePixels - alignedMinX,
-            height: ceil(pixelRect.maxY / scalePixels) * scalePixels - alignedMinY
-        ).intersection(fullPixelRect).integral
+    /// The pixelated replacement for the pixels inside `pixelRect` (bottom-
+    /// left-origin pixel space) — exactly what `pixelating(rect:blockSize:)`
+    /// stamps, so the live drag preview can show the same thing.
+    ///
+    /// Only the selected pixels are filtered and sampled: a block straddling
+    /// the selection's edge takes its color from inside the selection, never
+    /// from the surrounding image. The block grid stays anchored at the image
+    /// origin so separate redactions line up with each other.
+    func pixelatedPatch(in pixelRect: CGRect, blockSize: CGFloat) -> NSImage? {
+        guard size.width > 0,
+              let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { return nil }
+        let scalePixels = max(1, blockSize * CGFloat(cgImage.width) / size.width)
 
         // CGImage.cropping uses top-left-origin pixel coordinates.
-        guard let patchCG = originalCG.cropping(to: CGRect(
-            x: cropRect.minX,
-            y: pixelH - cropRect.maxY,
-            width: cropRect.width,
-            height: cropRect.height
+        guard let selectionCG = cgImage.cropping(to: CGRect(
+            x: pixelRect.minX,
+            y: CGFloat(cgImage.height) - pixelRect.maxY,
+            width: pixelRect.width,
+            height: pixelRect.height
         )) else { return nil }
 
         // Re-anchor the block grid to compensate for the crop offset: in the
-        // patch's coordinate space, the image origin sits at -cropRect.origin.
-        // Zero whenever the crop landed exactly on the grid.
+        // selection's coordinate space, the image origin sits at
+        // -pixelRect.origin.
         let gridAnchor = CGPoint(
-            x: -cropRect.minX.truncatingRemainder(dividingBy: scalePixels),
-            y: -cropRect.minY.truncatingRemainder(dividingBy: scalePixels)
+            x: -pixelRect.minX.truncatingRemainder(dividingBy: scalePixels),
+            y: -pixelRect.minY.truncatingRemainder(dividingBy: scalePixels)
         )
-        guard let pixelatedPatch = Self.pixellated(
-            patchCG, scalePixels: scalePixels, gridAnchor: gridAnchor
+        guard let pixelated = Self.pixellated(
+            selectionCG, scalePixels: scalePixels, gridAnchor: gridAnchor
         ) else { return nil }
-
-        guard let context = Self.bitmapContext(pixelWidth: Int(pixelW), pixelHeight: Int(pixelH))
-        else { return nil }
-        context.draw(originalCG, in: fullPixelRect)
-
-        // Stamp the pixelated patch at its aligned position, clipped to the
-        // exact target rect so partial edge blocks don't spill outside it.
-        context.saveGState()
-        context.clip(to: pixelRect)
-        context.draw(pixelatedPatch, in: cropRect)
-        context.restoreGState()
-
-        guard let output = context.makeImage() else { return nil }
-        return NSImage(cgImage: output, size: pointSize)
+        return NSImage(cgImage: pixelated, size: pixelRect.size)
     }
 
     /// The region of the bitmap (bottom-left-origin pixel space) that
@@ -539,6 +496,23 @@ extension NSImage {
 
         guard pixelRect.width >= 1, pixelRect.height >= 1 else { return nil }
         return pixelRect
+    }
+
+    /// Converts a bottom-left-origin pixel-space rect back into this image's
+    /// top-left-origin canvas point space — the inverse of the conversion in
+    /// `pixelationBounds(for:)`.
+    func canvasRect(forPixelRect pixelRect: CGRect) -> CGRect? {
+        guard size.width > 0, size.height > 0,
+              let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { return nil }
+        let sx = CGFloat(cgImage.width) / size.width
+        let sy = CGFloat(cgImage.height) / size.height
+        return CGRect(
+            x: pixelRect.minX / sx,
+            y: (CGFloat(cgImage.height) - pixelRect.maxY) / sy,
+            width: pixelRect.width / sx,
+            height: pixelRect.height / sy
+        )
     }
 
     /// An independent copy of the pixels inside `pixelRect` (bottom-left-

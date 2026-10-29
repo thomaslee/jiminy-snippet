@@ -62,44 +62,102 @@ struct NSImageOperationTests {
 
     // MARK: - Pixelation
 
-    /// The commit (`pixelating(rect:)`) must produce the same blocks the live
-    /// drag preview shows — which clips a full-image `pixelated()` copy — and
-    /// must leave every pixel outside the rect untouched. The rect is chosen
-    /// off the block grid so grid-anchoring mistakes can't hide.
-    @Test func pixelatingMatchesPreviewInsideRectAndOriginalOutside() throws {
+    /// Visits every pixel of a `size`×`size` 1x image, passing its RGBA byte
+    /// offset and whether its center lies inside `rect` (top-left point space).
+    private func forEachPixel(
+        size: Int, rect: CGRect, _ body: (_ offset: Int, _ inside: Bool) -> Void
+    ) {
+        for y in 0 ..< size {
+            for x in 0 ..< size {
+                // rgbaBytes rows are top-to-bottom and the image is 1x, so
+                // buffer coordinates match the rect's top-left point space.
+                let center = CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5)
+                body((y * size + x) * 4, rect.contains(center))
+            }
+        }
+    }
+
+    /// Black image with a white square at `rect` (top-left point space).
+    private func makeWhiteSquareOnBlack(size: Int, rect: CGRect) -> NSImage {
+        let ctx = CGContext(
+            data: nil, width: size, height: size, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(
+            x: rect.minX, y: CGFloat(size) - rect.maxY, width: rect.width, height: rect.height
+        ))
+        return NSImage(cgImage: ctx.makeImage()!, size: NSSize(width: size, height: size))
+    }
+
+    /// Blocks straddling the rect's edges must take their color from inside
+    /// the rect. Regression: a block whose center fell outside the selection
+    /// painted a strip of the surrounding image's color along the edge. The
+    /// rect is chosen off the block grid so every edge cuts through blocks.
+    @Test func pixelatingNeverSamplesColorsFromOutsideRect() throws {
+        let size = 64
+        let rect = CGRect(x: 13, y: 17, width: 25, height: 22)
+        let original = makeWhiteSquareOnBlack(size: size, rect: rect)
+
+        let committed = try #require(original.pixelating(rect: rect, blockSize: 10))
+        let bytes = try #require(rgbaBytes(of: committed))
+
+        var nonWhiteInside = 0
+        forEachPixel(size: size, rect: rect) { i, inside in
+            if inside, !isWhite(Array(bytes[i ..< i + 4])) {
+                nonWhiteInside += 1
+            }
+        }
+        #expect(nonWhiteInside == 0)
+    }
+
+    @Test func pixelatingLeavesPixelsOutsideRectUntouched() throws {
         let size = 64
         let original = makeGradientImage(size: size)
         let rect = CGRect(x: 13, y: 17, width: 25, height: 22)
 
         let committed = try #require(original.pixelating(rect: rect, blockSize: 10))
-        let preview = try #require(original.pixelated(blockSize: 10))
-
         let originalBytes = try #require(rgbaBytes(of: original))
         let committedBytes = try #require(rgbaBytes(of: committed))
-        let previewBytes = try #require(rgbaBytes(of: preview))
 
-        var insideMismatches = 0
         var outsideMismatches = 0
-        for y in 0 ..< size {
-            for x in 0 ..< size {
-                let i = (y * size + x) * 4
-                // rgbaBytes rows are top-to-bottom and the image is 1x, so
-                // buffer coordinates match the rect's top-left point space.
-                let inside = rect.contains(CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5))
-                for c in 0 ..< 4 {
-                    if inside {
-                        // Preview and commit may take separate Core Image
-                        // render passes; allow float rounding wiggle.
-                        if abs(Int(committedBytes[i + c]) - Int(previewBytes[i + c])) > 2 {
-                            insideMismatches += 1
-                        }
-                    } else if committedBytes[i + c] != originalBytes[i + c] {
-                        outsideMismatches += 1
-                    }
+        forEachPixel(size: size, rect: rect) { i, inside in
+            if !inside, committedBytes[i ..< i + 4] != originalBytes[i ..< i + 4] {
+                outsideMismatches += 1
+            }
+        }
+        #expect(outsideMismatches == 0)
+    }
+
+    /// The block grid is anchored at the image origin, not the selection, so
+    /// separate redactions line up. Blocks lying wholly inside the rect must
+    /// match a whole-image pass. Any pixel at least one block from every edge
+    /// sits in such a block whatever the grid phase.
+    @Test func pixelatingKeepsBlockGridAnchoredToImageOrigin() throws {
+        let size = 64
+        let blockSize: CGFloat = 10
+        let original = makeGradientImage(size: size)
+        let rect = CGRect(x: 13, y: 7, width: 41, height: 44)
+        let wholeImage = CGRect(x: 0, y: 0, width: size, height: size)
+
+        let committed = try #require(original.pixelating(rect: rect, blockSize: blockSize))
+        let reference = try #require(original.pixelating(rect: wholeImage, blockSize: blockSize))
+        let committedBytes = try #require(rgbaBytes(of: committed))
+        let referenceBytes = try #require(rgbaBytes(of: reference))
+
+        var mismatches = 0
+        forEachPixel(size: size, rect: rect.insetBy(dx: blockSize, dy: blockSize)) { i, inside in
+            guard inside else { return }
+            for c in i ..< i + 4 {
+                // Separate Core Image render passes; allow float rounding wiggle.
+                if abs(Int(committedBytes[c]) - Int(referenceBytes[c])) > 2 {
+                    mismatches += 1
                 }
             }
         }
-        #expect(insideMismatches == 0)
-        #expect(outsideMismatches == 0)
+        #expect(mismatches == 0)
     }
 }

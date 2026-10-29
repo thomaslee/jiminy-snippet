@@ -9,11 +9,6 @@ import SwiftUI
 
 struct AnnotationCanvas: View {
     let image: NSImage
-    /// Pre-pixelated copy of `image`, kept in sync by the parent. Used to
-    /// preview the destructive pixelate tool while the user drags. Optional
-    /// because the cache may be momentarily out of date right after the
-    /// underlying image changes.
-    let pixelatedImage: NSImage?
     @Binding var selectedTool: AnnotationTool?
     let selectedColor: Color
     let rectangleFillStyle: RectangleFillStyle
@@ -258,7 +253,7 @@ struct AnnotationCanvas: View {
             if case .creatingPixelate(let start, let end) = dragController.operation {
                 AnnotationRenderer.drawPixelatePreview(
                     rect: CGRect(from: start, to: end),
-                    pixelatedSource: pixelatedImage,
+                    image: image,
                     canvasScale: scale,
                     in: &context
                 )

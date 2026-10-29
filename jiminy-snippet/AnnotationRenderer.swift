@@ -236,14 +236,14 @@ enum AnnotationRenderer {
     // MARK: - Pixelate Drawing
 
     /// Renders the in-flight preview for the destructive pixelate tool by
-    /// stamping `pixelatedSource` (a pre-pixelated copy of the canvas image)
+    /// stamping the same pixelated patch a commit would apply to `image`,
     /// clipped to `rect`, then outlining the dragged region so the user can
     /// clearly see what they're about to redact. Pixelation is destructive
     /// on commit, so there's no persisted annotation to draw — only the
     /// live drag preview lives here.
     static func drawPixelatePreview(
         rect: CGRect,
-        pixelatedSource: NSImage?,
+        image: NSImage,
         canvasScale: CGFloat,
         in context: inout GraphicsContext
     ) {
@@ -251,15 +251,10 @@ enum AnnotationRenderer {
         guard bounds.width > 0, bounds.height > 0 else { return }
         let path = Path(bounds)
 
-        context.drawLayer { ctx in
-            ctx.clip(to: path)
-            if let source = pixelatedSource {
-                ctx.draw(
-                    Image(nsImage: source),
-                    in: CGRect(origin: .zero, size: source.size)
-                )
-            } else {
-                ctx.fill(path, with: .color(.gray))
+        if let preview = pixelatePreviewPatch(for: bounds, in: image) {
+            context.drawLayer { ctx in
+                ctx.clip(to: path)
+                ctx.draw(Image(nsImage: preview.image), in: preview.canvasRect)
             }
         }
 
@@ -281,6 +276,20 @@ enum AnnotationRenderer {
                 dash: [dashUnit, dashUnit]
             )
         )
+    }
+
+    /// The patch a pixelate commit would stamp for the canvas-point `rect`,
+    /// with where it sits in canvas points. Nil when the rect misses the image.
+    private static func pixelatePreviewPatch(
+        for rect: CGRect, in image: NSImage
+    ) -> (image: NSImage, canvasRect: CGRect)? {
+        guard let pixelRect = image.pixelationBounds(for: rect),
+              let patch = image.pixelatedPatch(
+                  in: pixelRect, blockSize: PixelateDefaults.blockSize(for: image.size)
+              ),
+              let canvasRect = image.canvasRect(forPixelRect: pixelRect)
+        else { return nil }
+        return (patch, canvasRect)
     }
 
     // MARK: - Text Drawing
