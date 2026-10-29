@@ -12,6 +12,7 @@ struct SettingsView: View {
         Form {
             Toggle("Launch on sign in", isOn: $settings.launchOnSignIn)
             Toggle("Show capture window on startup", isOn: $settings.showCaptureWindowOnStartup)
+            Toggle("Include app windows in screenshots", isOn: $settings.includeAppWindowsInCaptures)
         }
         .formStyle(.grouped)
         .frame(width: 350)

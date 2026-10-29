@@ -18,8 +18,15 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(showCaptureWindowOnStartup, forKey: Keys.showCaptureWindowOnStartup) }
     }
 
+    /// When enabled, the app's own windows stay on screen during capture so
+    /// they appear in the screenshot (e.g. to capture the app itself).
+    var includeAppWindowsInCaptures: Bool {
+        didSet { UserDefaults.standard.set(includeAppWindowsInCaptures, forKey: Keys.includeAppWindowsInCaptures) }
+    }
+
     private init() {
         self.showCaptureWindowOnStartup = UserDefaults.standard.bool(forKey: Keys.showCaptureWindowOnStartup)
+        self.includeAppWindowsInCaptures = UserDefaults.standard.bool(forKey: Keys.includeAppWindowsInCaptures)
         self.launchOnSignIn = SMAppService.mainApp.status == .enabled
     }
 
@@ -38,5 +45,6 @@ final class SettingsManager {
 
     private enum Keys {
         static let showCaptureWindowOnStartup = "showCaptureWindowOnStartup"
+        static let includeAppWindowsInCaptures = "includeAppWindowsInCaptures"
     }
 }

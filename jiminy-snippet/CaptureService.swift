@@ -64,14 +64,16 @@ final class CaptureService {
 
     // MARK: - Capture Flows
 
-    /// Captures the whole main display. Hides the app's own windows first so
-    /// they don't appear in the shot.
+    /// Captures the whole main display. Hides the app's own windows first
+    /// (unless the user opted to include them) so they don't appear in the shot.
     func captureFullscreen() async throws -> NSImage? {
         let hidden = hideAppWindows()
         defer { restoreWindows(hidden) }
 
         // Give the windows a beat to leave the compositor before capturing.
-        try? await Task.sleep(for: .milliseconds(500))
+        if !hidden.isEmpty {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
         return try await performFullscreenCapture()
     }
 
@@ -383,8 +385,11 @@ final class CaptureService {
     // MARK: - Window Hiding
 
     /// Hides every visible app window and returns them so the caller can
-    /// restore exactly that set once the capture flow finishes.
+    /// restore exactly that set once the capture flow finishes. Hides nothing
+    /// (returning an empty set) when the user has chosen to include the app's
+    /// windows in captures.
     private func hideAppWindows() -> [NSWindow] {
+        guard !SettingsManager.shared.includeAppWindowsInCaptures else { return [] }
         let visibleWindows = NSApplication.shared.windows.filter { $0.isVisible }
         for window in visibleWindows {
             window.setIsVisible(false)
